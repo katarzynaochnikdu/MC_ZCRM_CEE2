@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "ZCRM CCE2 - Gmail Tracker",
+  "version": "0.1.0",
+  "description": "Wykrywa otwarty mail w Gmail",
+  "permissions": [
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://mail.google.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  }
+}
+
