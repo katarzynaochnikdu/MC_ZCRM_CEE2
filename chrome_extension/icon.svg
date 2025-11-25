@@ -1,0 +1,77 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Gradient tła -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="100%" stop-color="#16213e"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Tło: zaokrąglony kwadrat -->
+  <rect width="128" height="128" rx="24" fill="url(#bg)"/>
+  
+  <!-- GMAIL (lewa strona) - koperta -->
+  <g transform="translate(16, 44)">
+    <!-- Tło koperty -->
+    <rect x="0" y="4" width="36" height="28" rx="3" fill="#EA4335"/>
+    <!-- Klapka koperty (M) -->
+    <path d="M 0 7 L 18 20 L 36 7" 
+          fill="none" 
+          stroke="#ffffff" 
+          stroke-width="3" 
+          stroke-linecap="round" 
+          stroke-linejoin="round"/>
+    <!-- Boki koperty -->
+    <path d="M 0 7 L 0 32" stroke="#C62828" stroke-width="2"/>
+    <path d="M 36 7 L 36 32" stroke="#C62828" stroke-width="2"/>
+  </g>
+  
+  <!-- Strzałki SYNC (środek) -->
+  <g transform="translate(64, 64)">
+    <!-- Strzałka w prawo -->
+    <path d="M -6 -8 L 6 -8" 
+          stroke="#4CAF50" 
+          stroke-width="4" 
+          stroke-linecap="round"/>
+    <path d="M 2 -12 L 6 -8 L 2 -4" 
+          fill="none" 
+          stroke="#4CAF50" 
+          stroke-width="4" 
+          stroke-linecap="round" 
+          stroke-linejoin="round"/>
+    
+    <!-- Strzałka w lewo -->
+    <path d="M 6 8 L -6 8" 
+          stroke="#2196F3" 
+          stroke-width="4" 
+          stroke-linecap="round"/>
+    <path d="M -2 4 L -6 8 L -2 12" 
+          fill="none" 
+          stroke="#2196F3" 
+          stroke-width="4" 
+          stroke-linecap="round" 
+          stroke-linejoin="round"/>
+  </g>
+  
+  <!-- ZOHO (prawa strona) - litera Z w kółku -->
+  <g transform="translate(76, 44)">
+    <!-- Kółko tła -->
+    <circle cx="18" cy="18" r="18" fill="#F57C00"/>
+    <!-- Litera Z -->
+    <path d="M 8 10 L 28 10 L 8 26 L 28 26" 
+          fill="none" 
+          stroke="#ffffff" 
+          stroke-width="4" 
+          stroke-linecap="round" 
+          stroke-linejoin="round"/>
+  </g>
+  
+  <!-- Tekst pod spodem -->
+  <text x="64" y="108" 
+        font-family="Arial, sans-serif" 
+        font-size="10" 
+        font-weight="bold" 
+        fill="#ffffff" 
+        text-anchor="middle"
+        opacity="0.6">SYNC</text>
+</svg>

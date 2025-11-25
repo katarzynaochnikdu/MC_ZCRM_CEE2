@@ -1,8 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "ZCRM CCE2 - Gmail Tracker",
+  "name": "ZCRM CCE2 - Gmail ↔ Zoho CRM",
   "version": "0.1.0",
-  "description": "Wykrywa otwarty mail w Gmail",
+  "description": "Integracja Gmail z Zoho CRM - automatyczna synchronizacja kontaktów i leadów",
+  "icons": {
+    "16": "icon-16.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
   "permissions": [
     "sidePanel"
   ],
