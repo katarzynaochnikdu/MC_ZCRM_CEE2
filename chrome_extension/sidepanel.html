@@ -74,23 +74,28 @@
       background-color: #ffebee;
       color: #c62828;
     }
+    
+    .status.loading {
+      background-color: #fff3e0;
+      color: #e65100;
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>🔵 ZCRM CCE2 - ETAP 0</h1>
+    <h1>🔵 ZCRM CCE2 - ETAP 1 (System Stanów)</h1>
     
     <div class="info-row">
-      <div class="label">Status:</div>
+      <div class="label">Stan Gmaila:</div>
       <div class="value">
-        <span id="status" class="status inactive">Brak danych</span>
+        <span id="status" class="status inactive">Oczekiwanie...</span>
       </div>
     </div>
     
     <div class="info-row">
-      <div class="label">Otwarty mail:</div>
+      <div class="label">Message ID:</div>
       <div class="value" id="messageId">
-        <span class="no-data">Nie wykryto otwartego maila</span>
+        <span class="no-data">Nie wykryto</span>
       </div>
     </div>
     
@@ -102,6 +107,7 @@
     </div>
   </div>
   
+  <script src="logger.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

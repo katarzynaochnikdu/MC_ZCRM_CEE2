@@ -5,8 +5,18 @@
   "description": "Integracja Gmail z Zoho CRM - automatyczna synchronizacja kontaktów i leadów",
   "icons": {
     "16": "icon-16.png",
+    "32": "icon-32.png",
     "48": "icon-48.png",
     "128": "icon-128.png"
+  },
+  "action": {
+    "default_title": "ZCRM CCE2 - Gmail ↔ Zoho CRM",
+    "default_icon": {
+      "16": "icon-16.png",
+      "32": "icon-32.png",
+      "48": "icon-48.png",
+      "128": "icon-128.png"
+    }
   },
   "permissions": [
     "sidePanel"
@@ -20,7 +30,7 @@
   "content_scripts": [
     {
       "matches": ["https://mail.google.com/*"],
-      "js": ["content.js"],
+      "js": ["logger.js", "content.js"],
       "run_at": "document_idle"
     }
   ],

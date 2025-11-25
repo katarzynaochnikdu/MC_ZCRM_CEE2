@@ -1,26 +1,36 @@
-// Background service worker - odbiera eventy od content script
+// Background service worker - obsługa stanów Gmaila (ETAP 1)
 
-// Przechowuje ostatnio widziany messageId (stan UI, nie dane)
-let currentMessageId = null;
-let currentThreadId = null;
+// Import loggera dla service worker
+try {
+  importScripts('logger.js');
+} catch (e) {
+  console.warn('[Background] Nie można załadować logger.js:', e);
+}
 
-// Nasłuchuj na wiadomości od content script
+// Inicjalizacja loggera
+let backgroundLogger = null;
+if (typeof Logger !== 'undefined') {
+  backgroundLogger = new Logger('Background');
+  if (!self.loggers) self.loggers = [];
+  self.loggers.push(backgroundLogger);
+}
+
+// Przechowuje aktualny stan Gmaila
+let currentState = null;
+
+// Nasłuchuj na zmiany stanu od content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'mail-opened') {
-    console.log('[Background] Otrzymano event mail-opened:', message.data);
+  if (message.type === 'gmail-state-changed') {
+    console.log('[Background] Otrzymano zmianę stanu:', message.data);
+    backgroundLogger.info('Zmiana stanu Gmaila', message.data);
     
-    // Zapisz stan
-    currentMessageId = message.data.gmailMessageId;
-    currentThreadId = message.data.threadId;
+    // Zapisz aktualny stan
+    currentState = message.data;
     
-    // Wyślij event do sidepanel
+    // Wyślij stan do sidepanel
     chrome.runtime.sendMessage({
-      type: 'update-mail',
-      data: {
-        gmailMessageId: currentMessageId,
-        threadId: currentThreadId,
-        timestamp: message.data.timestamp
-      }
+      type: 'state-update',
+      data: currentState
     }).catch(() => {
       // Sidepanel może być niezaładowany - to normalne
       console.log('[Background] Sidepanel nie jest otwarty');
@@ -29,21 +39,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ success: true });
   }
   
+  // Endpoint dla sidepanel do pobrania aktualnego stanu
+  if (message.type === 'get-current-state') {
+    console.log('[Background] Sidepanel pyta o aktualny stan');
+    sendResponse(currentState);
+  }
+  
   return true; // Asynchroniczna odpowiedź
 });
 
-// Endpoint dla sidepanel do pobrania aktualnego stanu
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'get-current-mail') {
-    console.log('[Background] Sidepanel pyta o aktualny mail');
-    sendResponse({
-      gmailMessageId: currentMessageId,
-      threadId: currentThreadId
-    });
-  }
-  
-  return true;
+// Obsługa kliknięcia w ikonę rozszerzenia - otwórz sidepanel
+chrome.action.onClicked.addListener((tab) => {
+  chrome.sidePanel.open({ windowId: tab.windowId });
+  console.log('[Background] Otwieram sidepanel');
 });
 
-console.log('[Background] Service worker uruchomiony');
-
+console.log('[Background] Service worker uruchomiony (ETAP 1 - System stanów)');
+backgroundLogger.info('Service worker uruchomiony (ETAP 1 - System stanów)');
