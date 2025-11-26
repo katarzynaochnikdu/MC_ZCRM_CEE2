@@ -2,6 +2,7 @@
 
 // Import loggera
 const sidepanelLogger = new Logger('Sidepanel');
+sidepanelLogger.captureConsole(); // Przechwytuj wszystko z konsoli
 if (!window.loggers) window.loggers = [];
 window.loggers.push(sidepanelLogger);
 

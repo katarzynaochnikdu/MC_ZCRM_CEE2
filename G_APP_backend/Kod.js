@@ -23,42 +23,26 @@ function saveLogToDrive(logData) {
   try {
     const folder = getOrCreateLogFolder();
     
-    // Nazwa pliku: data + czas
+    // Nazwa pliku: data (jeden plik na dzień)
     const now = new Date();
-    const dateStr = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-    const timeStr = Utilities.formatDate(now, Session.getScriptTimeZone(), 'HH-mm-ss');
-    const fileName = `log_${dateStr}_${timeStr}.txt`;
+    const timezone = 'Europe/Warsaw'; // Stała strefa czasowa
+    const dateStr = Utilities.formatDate(now, timezone, 'yyyy-MM-dd');
+    const fileName = `log_${dateStr}.txt`;
     
-    // Sprawdź czy dzisiejszy plik już istnieje (dodawaj do niego)
-    const existingFiles = folder.getFilesByName(`log_${dateStr}_*.txt`);
+    // Sprawdź czy dzisiejszy plik już istnieje
+    const files = folder.getFilesByName(fileName);
     let logFile = null;
     
-    if (existingFiles.hasNext()) {
-      // Znajdź najnowszy plik z dzisiaj
-      let latestFile = null;
-      let latestTime = 0;
-      
-      while (existingFiles.hasNext()) {
-        const file = existingFiles.next();
-        const fileTime = file.getLastUpdated().getTime();
-        if (fileTime > latestTime) {
-          latestTime = fileTime;
-          latestFile = file;
-        }
-      }
-      
-      if (latestFile) {
-        logFile = latestFile;
-      }
-    }
-    
-    // Jeśli nie ma pliku z dzisiaj, utwórz nowy
-    if (!logFile) {
-      logFile = folder.createFile(fileName, '');
+    if (files.hasNext()) {
+      // Plik istnieje - użyj go
+      logFile = files.next();
+    } else {
+      // Utwórz nowy plik
+      logFile = folder.createFile(fileName, '=== Log ZCRM CCE2 - ' + dateStr + ' ===\n\n');
     }
     
     // Dodaj log do pliku
-    const timestamp = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+    const timestamp = Utilities.formatDate(now, timezone, 'yyyy-MM-dd HH:mm:ss');
     const logEntry = `[${timestamp}] ${logData.source}: ${logData.message}\n`;
     
     // Pobierz istniejącą zawartość i dodaj nowy wpis

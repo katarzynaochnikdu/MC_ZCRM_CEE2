@@ -202,6 +202,7 @@ function observeUrlChanges() {
 let contentLogger = null;
 if (typeof Logger !== 'undefined') {
   contentLogger = new Logger('ContentScript');
+  contentLogger.captureConsole(); // Przechwytuj wszystko z konsoli
   if (!window.loggers) window.loggers = [];
   window.loggers.push(contentLogger);
 }

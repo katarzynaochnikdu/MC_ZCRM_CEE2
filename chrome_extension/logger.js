@@ -1,13 +1,7 @@
 // Logger - system logowania do Google Drive przez GAS
 
 // KONFIGURACJA: URL do Twojego Google Apps Script Web App
-// Aby uzyskać URL:
-// 1. Otwórz https://script.google.com
-// 2. Wybierz swój projekt ZCRM_CCE2
-// 3. Kliknij "Wdróż" → "Nowe wdrożenie"
-// 4. Wybierz typ: "Aplikacja internetowa"
-// 5. Ustaw: Wykonaj jako: "Ja", Kto ma dostęp: "Każdy"
-// 6. Skopiuj URL i wklej tutaj:
+// Skopiuj URL i wklej tutaj:
 const GAS_WEB_APP_URL = 'https://script.google.com/a/macros/med-space.pl/s/AKfycbx3O1NZWZZtRMVGXsMf-gi25GHbH-KnsLe9rPj-8HWr682Drs_Mk0z-cJjO0r5Q-AM/exec';
 
 // Poziomy logowania
@@ -26,9 +20,50 @@ class Logger {
     this.isSending = false;
   }
 
+  // Metoda do przechwytywania wszystkich logów z konsoli
+  captureConsole() {
+    const originalLog = console.log;
+    const originalWarn = console.warn;
+    const originalError = console.error;
+    const originalDebug = console.debug;
+
+    const self = this;
+
+    console.log = function(...args) {
+      originalLog.apply(console, args);
+      // Unikaj pętli nieskończonej (nie loguj logów loggera)
+      if (args[0] && typeof args[0] === 'string' && args[0].startsWith('[Logger]')) return;
+      self.log(LOG_LEVELS.INFO, args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' '));
+    };
+
+    console.warn = function(...args) {
+      originalWarn.apply(console, args);
+      self.log(LOG_LEVELS.WARN, args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' '));
+    };
+
+    console.error = function(...args) {
+      originalError.apply(console, args);
+      self.log(LOG_LEVELS.ERROR, args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' '));
+    };
+    
+    console.debug = function(...args) {
+      originalDebug.apply(console, args);
+      self.log(LOG_LEVELS.DEBUG, args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' '));
+    };
+    
+    this.info('Przechwytywanie konsoli włączone');
+  }
+
   // Wysyłaj logi w batch (co 2 sekundy lub gdy kolejka > 10)
   async sendLogs() {
     if (this.isSending || this.logQueue.length === 0) {
+      return;
+    }
+    
+    // Sprawdź czy GAS URL jest skonfigurowany
+    if (!GAS_WEB_APP_URL || GAS_WEB_APP_URL === '') {
+      // Brak URL - wyczyść kolejkę, logi są w konsoli
+      this.logQueue = [];
       return;
     }
 
@@ -37,36 +72,42 @@ class Logger {
     this.logQueue = [];
 
     try {
-      // Wyślij wszystkie logi w jednym request
-      const response = await fetch(GAS_WEB_APP_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          source: this.source,
-          message: logsToSend.map(log => `[${log.level}] ${log.message}`).join('\n'),
-          level: 'BATCH',
-          timestamp: new Date().toISOString(),
-          additionalData: {
-            count: logsToSend.length,
+      // Wykrywanie środowiska: Service Worker vs inne
+      const isServiceWorker = typeof ServiceWorkerGlobalScope !== 'undefined' && self instanceof ServiceWorkerGlobalScope;
+
+      if (isServiceWorker) {
+        // Jesteśmy w background (Service Worker) - wyślij bezpośrednio
+        await fetch(GAS_WEB_APP_URL, {
+          method: 'POST',
+          mode: 'no-cors', 
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source: this.source,
+            message: logsToSend.map(log => {
+              let msg = `[${log.level}] ${log.message}`;
+              if (log.additionalData && Object.keys(log.additionalData).length > 0) {
+                msg += ' ' + JSON.stringify(log.additionalData);
+              }
+              return msg;
+            }).join('\n'),
+            level: 'BATCH',
+            timestamp: new Date().toISOString(),
+            additionalData: { count: logsToSend.length }
+          })
+        });
+        console.log(`[Logger] Wysłano ${logsToSend.length} logów do Drive (z Background)`);
+      } else {
+        // Jesteśmy w Content Script lub Sidepanel - wyślij do Background
+        chrome.runtime.sendMessage({
+          type: 'send-logs-to-gas',
+          data: {
+            source: this.source,
             logs: logsToSend
           }
-        })
-      });
-
-      const result = await response.json();
-      if (result.success) {
-        console.log(`[Logger] Wysłano ${logsToSend.length} logów do Drive`);
-      } else {
-        console.error('[Logger] Błąd wysyłania logów:', result.error);
-        // Przywróć logi do kolejki przy błędzie
-        this.logQueue.unshift(...logsToSend);
+        });
       }
     } catch (error) {
-      console.error('[Logger] Błąd połączenia z GAS:', error);
-      // Przywróć logi do kolejki przy błędzie
-      this.logQueue.unshift(...logsToSend);
+      console.error('[Logger] Błąd wysyłania logów:', error);
     } finally {
       this.isSending = false;
     }

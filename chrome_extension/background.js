@@ -11,6 +11,7 @@ try {
 let backgroundLogger = null;
 if (typeof Logger !== 'undefined') {
   backgroundLogger = new Logger('Background');
+  backgroundLogger.captureConsole(); // Przechwytuj wszystko z konsoli
   if (!self.loggers) self.loggers = [];
   self.loggers.push(backgroundLogger);
 }
@@ -48,11 +49,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true; // Asynchroniczna odpowiedź
 });
 
-// Obsługa kliknięcia w ikonę rozszerzenia - otwórz sidepanel
-chrome.action.onClicked.addListener((tab) => {
-  chrome.sidePanel.open({ windowId: tab.windowId });
-  console.log('[Background] Otwieram sidepanel');
-});
+// Ustaw zachowanie panelu - otwieranie po kliknięciu w ikonę (toggle obsługuje Chrome)
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
+  .catch((error) => console.error('[Background] Błąd ustawiania panelu:', error));
+
+// Usuwamy onClicked listener, bo Chrome sam obsłuży toggle
+// chrome.action.onClicked.addListener(...) <- TO BYŁO ZŁE
+
 
 console.log('[Background] Service worker uruchomiony (ETAP 1 - System stanów)');
 backgroundLogger.info('Service worker uruchomiony (ETAP 1 - System stanów)');
