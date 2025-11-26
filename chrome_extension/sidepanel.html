@@ -79,11 +79,25 @@
       background-color: #fff3e0;
       color: #e65100;
     }
+    
+    /* ETAP 2: Klikalne elementy */
+    .clickable {
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    
+    .clickable:hover {
+      background-color: #e3f2fd !important;
+    }
+    
+    .clickable:active {
+      background-color: #bbdefb !important;
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>🔵 ZCRM CCE2 - ETAP 1 (System Stanów)</h1>
+    <h1>🔵 ZCRM CCE2 - ETAP 2 (Auto + Manual Fetch)</h1>
     
     <div class="info-row">
       <div class="label">Stan Gmaila:</div>
@@ -94,16 +108,23 @@
     
     <div class="info-row">
       <div class="label">Message ID:</div>
-      <div class="value" id="messageId">
+      <div class="value clickable" id="messageId" title="Kliknij aby pobrać pełną wiadomość">
         <span class="no-data">Nie wykryto</span>
       </div>
     </div>
     
     <div class="info-row">
       <div class="label">Thread ID:</div>
-      <div class="value" id="threadId">
+      <div class="value clickable" id="threadId" title="Kliknij aby pobrać pełny wątek">
         <span class="no-data">-</span>
       </div>
+    </div>
+
+    <!-- ETAP 2: Sekcja danych pobranych z Gmail API -->
+    <div id="fetchedDataSection" style="display: none;">
+      <hr style="margin: 20px 0; border: none; border-top: 1px solid #e0e0e0;">
+      <h2 style="font-size: 14px; margin-bottom: 10px; color: #5f6368;">📩 Pobrane dane:</h2>
+      <div id="fetchedData" style="font-size: 12px; background: #f8f9fa; padding: 10px; border-radius: 4px; max-height: 300px; overflow-y: auto; white-space: pre-wrap; font-family: 'Courier New', monospace;"></div>
     </div>
   </div>
   

@@ -1,4 +1,4 @@
-// Sidepanel - wyświetlanie stanów Gmaila (ETAP 1)
+// Sidepanel - wyświetlanie stanów Gmaila (ETAP 1 + ETAP 2)
 
 // Import loggera
 const sidepanelLogger = new Logger('Sidepanel');
@@ -9,6 +9,13 @@ window.loggers.push(sidepanelLogger);
 const messageIdElement = document.getElementById('messageId');
 const threadIdElement = document.getElementById('threadId');
 const statusElement = document.getElementById('status');
+
+// ETAP 2: Elementy dla pobranych danych
+const fetchedDataSection = document.getElementById('fetchedDataSection');
+const fetchedData = document.getElementById('fetchedData');
+
+// ETAP 2: Przechowuje aktualny stan (aby ignorować nieaktualne dane)
+let currentState = null;
 
 // Mapowanie stanów na czytelne nazwy
 const STAN_NAMES = {
@@ -28,14 +35,18 @@ const STAN_COLORS = {
   'thread_view': 'status active'
 };
 
-// Funkcja aktualizująca UI na podstawie stanu
+// ETAP 1: Funkcja aktualizująca UI na podstawie stanu Gmaila
 function updateUI(state) {
+  // Zapisz aktualny stan (ETAP 2: do weryfikacji czy dane są aktualne)
+  currentState = state;
+
   if (!state) {
     // Brak stanu - nie jesteśmy w Gmail lub jeszcze nie wykryto
     statusElement.textContent = '⏸️ Oczekiwanie...';
     statusElement.className = 'status inactive';
-    messageIdElement.innerHTML = '<span class="no-data">Nie wykryto stanu Gmaila</span>';
-    threadIdElement.innerHTML = '<span class="no-data">-</span>';
+    messageIdElement.textContent = 'Nie wykryto stanu Gmaila';
+    messageIdElement.style.fontWeight = 'normal';
+    threadIdElement.textContent = '-';
     return;
   }
 
@@ -43,28 +54,122 @@ function updateUI(state) {
   statusElement.textContent = STAN_NAMES[state.stan] || '❓ Nieznany stan';
   statusElement.className = STAN_COLORS[state.stan] || 'status inactive';
 
-  // Aktualizuj messageId
+  // Aktualizuj messageId (używamy textContent żeby nie usuwać click listener)
   if (state.messageId) {
-    messageIdElement.innerHTML = `<strong>${state.messageId}</strong>`;
+    messageIdElement.textContent = state.messageId;
+    messageIdElement.style.fontWeight = 'bold';
   } else {
-    messageIdElement.innerHTML = '<span class="no-data">Brak</span>';
+    messageIdElement.textContent = 'Brak';
+    messageIdElement.style.fontWeight = 'normal';
   }
 
-  // Aktualizuj threadId
+  // Aktualizuj threadId (używamy textContent żeby nie usuwać click listener)
   if (state.threadId) {
-    threadIdElement.innerHTML = state.threadId;
+    threadIdElement.textContent = state.threadId;
   } else {
-    threadIdElement.innerHTML = '<span class="no-data">-</span>';
+    threadIdElement.textContent = '-';
   }
 
   console.log('[Sidepanel] Zaktualizowano UI stanem:', state);
 }
 
+// ETAP 2: Funkcja wyświetlająca pobrane dane z Gmail API
+function displayFetchedData(data, type) {
+  // Sprawdź czy dane są aktualne (messageId musi się zgadzać)
+  if (type === 'message' && data.messageId !== currentState?.messageId) {
+    console.log('[Sidepanel] Ignoruję nieaktualne dane (message):', data.messageId, '!==', currentState?.messageId);
+    return;
+  }
+  if (type === 'thread' && data.threadId !== currentState?.threadId) {
+    console.log('[Sidepanel] Ignoruję nieaktualne dane (thread):', data.threadId, '!==', currentState?.threadId);
+    return;
+  }
+
+  // Pokaż sekcję danych
+  fetchedDataSection.style.display = 'block';
+
+  // Wyświetl dane w formacie JSON
+  fetchedData.textContent = JSON.stringify(data, null, 2);
+
+  console.log('[Sidepanel] Wyświetlono pobrane dane:', type, data);
+}
+
+// ETAP 2: Obsługa kliknięcia w Message ID
+messageIdElement.addEventListener('click', () => {
+  if (!currentState || !currentState.messageId) {
+    console.log('[Sidepanel] Brak messageId do pobrania');
+    return;
+  }
+
+  console.log('[Sidepanel] Kliknięto Message ID - żądanie pełnej wiadomości:', currentState.messageId);
+  chrome.runtime.sendMessage({
+    type: 'manual-fetch-message',
+    messageId: currentState.messageId,
+    threadId: currentState.threadId
+  });
+
+  // Wizualna informacja
+  fetchedData.textContent = '⏳ Pobieranie pełnej wiadomości...';
+  fetchedDataSection.style.display = 'block';
+});
+
+// ETAP 2: Obsługa kliknięcia w Thread ID
+if (threadIdElement) {
+  threadIdElement.addEventListener('click', () => {
+    console.log('[Sidepanel] CLICK na Thread ID - currentState:', currentState);
+    
+    if (!currentState || !currentState.threadId) {
+      console.log('[Sidepanel] Brak threadId do pobrania');
+      return;
+    }
+
+    console.log('[Sidepanel] Kliknięto Thread ID - żądanie pełnego wątku:', currentState.threadId, 'messageId:', currentState.messageId);
+    
+    chrome.runtime.sendMessage({
+      type: 'manual-fetch-thread',
+      threadId: currentState.threadId,
+      messageId: currentState.messageId
+    }, (response) => {
+      console.log('[Sidepanel] Odpowiedź z background (manual-fetch-thread):', response);
+    });
+
+    // Wizualna informacja
+    if (fetchedData) {
+      fetchedData.textContent = '⏳ Pobieranie pełnego wątku...';
+    }
+    if (fetchedDataSection) {
+      fetchedDataSection.style.display = 'block';
+    }
+  });
+  console.log('[Sidepanel] Click listener dodany do Thread ID');
+} else {
+  console.error('[Sidepanel] threadIdElement nie znaleziony!');
+}
+
 // Nasłuchuj na wiadomości od background.js
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // ETAP 1: Update stanu Gmaila
   if (message.type === 'state-update') {
     console.log('[Sidepanel] Otrzymano update stanu:', message.data);
     updateUI(message.data);
+  }
+
+  // ETAP 2: Auto-fetch (szybki podgląd)
+  if (message.type === 'auto-mail-data') {
+    console.log('[Sidepanel] Otrzymano auto-fetch data:', message.data);
+    displayFetchedData(message.data, 'message');
+  }
+
+  // ETAP 2: Manual message fetch (pełne dane)
+  if (message.type === 'full-message-ready') {
+    console.log('[Sidepanel] Otrzymano full-message-ready:', message.data);
+    displayFetchedData(message.data, 'message');
+  }
+
+  // ETAP 2: Manual thread fetch (pełny wątek)
+  if (message.type === 'full-thread-ready') {
+    console.log('[Sidepanel] Otrzymano full-thread-ready:', message.data);
+    displayFetchedData(message.data, 'thread');
   }
 });
 
@@ -76,5 +181,5 @@ chrome.runtime.sendMessage({
   updateUI(response);
 });
 
-console.log('[Sidepanel] Zainicjalizowano (ETAP 1 - System stanów)');
-sidepanelLogger.info('Sidepanel zainicjalizowano (ETAP 1 - System stanów)');
+console.log('[Sidepanel] Zainicjalizowano (ETAP 1 + ETAP 2)');
+sidepanelLogger.info('Sidepanel zainicjalizowano (ETAP 1 + ETAP 2)');

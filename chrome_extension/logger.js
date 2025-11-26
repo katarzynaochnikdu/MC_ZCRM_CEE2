@@ -2,7 +2,7 @@
 
 // KONFIGURACJA: URL do Twojego Google Apps Script Web App
 // Skopiuj URL i wklej tutaj:
-const GAS_WEB_APP_URL = 'https://script.google.com/a/macros/med-space.pl/s/AKfycbx3O1NZWZZtRMVGXsMf-gi25GHbH-KnsLe9rPj-8HWr682Drs_Mk0z-cJjO0r5Q-AM/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/a/macros/med-space.pl/s/AKfycbwX0Oeur5Hx5k0-T8IbgyeK67vhHfepA5lRNypftgL4wDNFeK8-BkrXZTlKzuW39p8/exec';
 
 // Poziomy logowania
 const LOG_LEVELS = {
@@ -164,9 +164,16 @@ class Logger {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { Logger, LOG_LEVELS };
 } else {
-  // Dla użycia w rozszerzeniu Chrome
-  window.Logger = Logger;
-  window.LOG_LEVELS = LOG_LEVELS;
+  // Dla użycia w rozszerzeniu Chrome (różne konteksty)
+  if (typeof window !== 'undefined') {
+    // Zwykły kontekst przeglądarki (content script, sidepanel)
+    window.Logger = Logger;
+    window.LOG_LEVELS = LOG_LEVELS;
+  } else if (typeof self !== 'undefined') {
+    // Service worker / worker – nie ma obiektu window
+    self.Logger = Logger;
+    self.LOG_LEVELS = LOG_LEVELS;
+  }
 }
 
 // Automatyczne wysyłanie logów co 2 sekundy
