@@ -611,6 +611,4 @@ Ta dokumentacja opisuje **dokładnie**, które funkcje i pliki odpowiadają za:
 - wykrywanie stanów Gmaila i ich propagację do UI,
 - komunikację z Google Apps Script,
 - tworzenie i wysyłanie logów na Google Drive,
-- wymagania konfiguracyjne po stronie GCP/GAS.
-
-
+- wymagania konfiguracyjne po stronie GCP/GAS. 
