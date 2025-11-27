@@ -278,6 +278,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.log('[Sidepanel] 💾 Wątek zapisany w cache:', currentState.threadId);
     }
     
+    // Zaktualizuj przycisk - pokaż że wątek jest już pobrany
+    if (fetchThreadBtn) {
+      fetchThreadBtn.textContent = `✅ Cały wątek pobrany (${message.data.messageCount || 0} wiadomości)`;
+      fetchThreadBtn.disabled = true;
+    }
+    
     displayFetchedData(message.data, 'thread');
   }
   
