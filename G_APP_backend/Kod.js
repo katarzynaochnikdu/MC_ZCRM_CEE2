@@ -66,9 +66,17 @@ function saveLogToDrive(logData) {
 
 // ========== ETAP 2: Gmail API Fetch Functions ==========
 
-// Funkcja do pobrania pełnej wiadomości (auto-fetch) - BEZ snippet, wszystko jako FULL
-function fetchMessageSimple(messageId, threadId) {
+// ETAP 2*: Thread Intelligence - szybkie sprawdzenie liczby wiadomości (20-50ms)
+function getThreadMetadata(messageId) {
   try {
+    if (!messageId || messageId.trim() === '') {
+      return {
+        success: false,
+        error: 'messageId jest pusty'
+      };
+    }
+    
+    // Pobierz wiadomość aby dostać się do wątku
     const message = GmailApp.getMessageById(messageId);
     
     if (!message) {
@@ -78,20 +86,29 @@ function fetchMessageSimple(messageId, threadId) {
       };
     }
     
+    // Pobierz wątek
+    const thread = message.getThread();
+    
+    if (!thread) {
+      return {
+        success: false,
+        error: 'Wątek nie znaleziony'
+      };
+    }
+    
+    // SZYBKIE wywołanie - tylko metadata, bez ciał wiadomości
+    const messageCount = thread.getMessageCount();
+    
     return {
       success: true,
       messageId: messageId,
-      threadId: threadId,
-      subject: message.getSubject(),
-      from: message.getFrom(),
-      to: message.getTo(),
-      date: message.getDate().toISOString(),
-      plainBody: message.getPlainBody(),  // PEŁNA treść bez obcinania
-      bodyLength: message.getPlainBody().length
+      threadId: thread.getId(), // Prawdziwy thread ID z API
+      messageCount: messageCount,
+      hasMultipleMessages: messageCount > 1
     };
     
   } catch (error) {
-    Logger.log('Błąd fetchMessageSimple: ' + error.toString());
+    Logger.log('Błąd getThreadMetadata: ' + error.toString());
     return {
       success: false,
       error: error.toString()
@@ -269,14 +286,16 @@ function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents);
     
-    // ========== ETAP 2: Gmail API Routing ==========
+    // ========== ETAP 2*: Gmail API Routing ==========
     if (data.action) {
       let result;
       
-      if (data.action === 'fetch-message-simple') {
-        result = fetchMessageSimple(data.messageId, data.threadId);
-      } else if (data.action === 'fetch-message-full') {
+      // ETAP 2*: fetch-message-simple teraz używa pełnej wiadomości
+      if (data.action === 'fetch-message-simple' || data.action === 'fetch-message-full') {
         result = fetchMessageFull(data.messageId, data.threadId);
+      } else if (data.action === 'get-thread-metadata') {
+        // Thread Intelligence: szybkie sprawdzenie messageCount (20-50ms)
+        result = getThreadMetadata(data.messageId);
       } else if (data.action === 'fetch-thread-full') {
         result = fetchThreadFull(data.threadId, data.messageId);
       } else {

@@ -80,24 +80,37 @@
       color: #e65100;
     }
     
-    /* ETAP 2: Klikalne elementy */
-    .clickable {
+    /* ETAP 2*: Przycisk pobierania wątku */
+    .fetch-btn {
+      width: 100%;
+      padding: 10px 15px;
+      background-color: #1a73e8;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 600;
       cursor: pointer;
       transition: background-color 0.2s;
     }
     
-    .clickable:hover {
-      background-color: #e3f2fd !important;
+    .fetch-btn:hover {
+      background-color: #1557b0;
     }
     
-    .clickable:active {
-      background-color: #bbdefb !important;
+    .fetch-btn:active {
+      background-color: #0d47a1;
+    }
+    
+    .fetch-btn:disabled {
+      background-color: #ccc;
+      cursor: not-allowed;
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>🔵 ZCRM CCE2 - ETAP 2* (Auto + Manual Fetch + Kontrola aktualności)</h1>
+    <h1>🔵 ZCRM CCE2 - ETAP 2* (Auto-Full + Manual-Thread)</h1>
     
     <div class="info-row">
       <div class="label">Stan Gmaila:</div>
@@ -108,16 +121,23 @@
     
     <div class="info-row">
       <div class="label">Message ID:</div>
-      <div class="value clickable" id="messageId" title="Kliknij aby pobrać pełną wiadomość">
+      <div class="value" id="messageId">
         <span class="no-data">Nie wykryto</span>
       </div>
     </div>
     
     <div class="info-row">
       <div class="label">Thread ID:</div>
-      <div class="value clickable" id="threadId" title="Kliknij aby pobrać pełny wątek">
+      <div class="value" id="threadId">
         <span class="no-data">-</span>
       </div>
+    </div>
+    
+    <!-- ETAP 2*: Przycisk do pobierania pełnego wątku -->
+    <div class="info-row">
+      <button id="fetchThreadBtn" class="fetch-btn" style="display: none;">
+        🧵 Pobierz cały wątek
+      </button>
     </div>
 
     <!-- ETAP 2: Sekcja danych pobranych z Gmail API -->

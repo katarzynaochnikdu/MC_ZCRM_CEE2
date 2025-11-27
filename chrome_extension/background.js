@@ -25,6 +25,9 @@ const GAS_WEB_APP_URL_FOR_FETCH = typeof GAS_WEB_APP_URL !== 'undefined'
   ? GAS_WEB_APP_URL 
   : 'https://script.google.com/a/macros/med-space.pl/s/AKfycbwX0Oeur5Hx5k0-T8IbgyeK67vhHfepA5lRNypftgL4wDNFeK8-BkrXZTlKzuW39p8/exec';
 
+// ETAP 2*: Konfiguracja auto-fetch (true = włączony, false = wyłączony)
+const AUTO_FETCH_ENABLED = true;
+
 // ETAP 2: Funkcja wywołująca GAS WebApp
 async function callGAS(action, params) {
   const startTime = performance.now();
@@ -106,34 +109,65 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.log('[Background] Sidepanel nie jest otwarty');
     });
     
-    // ETAP 2: AUTO-FETCH gdy mail_opened
-    if (message.data.stan === 'mail_opened' && message.data.messageId) {
+    // ETAP 2*: AUTO-FETCH gdy mail_opened (opcjonalny, ZAWSZE pełna wiadomość)
+    if (AUTO_FETCH_ENABLED && message.data.stan === 'mail_opened' && message.data.messageId) {
       const autoFetchStart = performance.now();
-      console.log('[Background] 🚀 AUTO-FETCH START:', message.data.messageId);
+      console.log('[Background] 🚀 AUTO-FETCH-FULL START:', message.data.messageId);
       
-      // Wywołaj GAS (async)
-      callGAS('fetch-message-simple', {
+      // KROK 1: Pobierz pełną wiadomość
+      callGAS('fetch-message-full', {
         messageId: message.data.messageId,
         threadId: message.data.threadId
       }).then(result => {
         const totalTime = performance.now() - autoFetchStart;
-        // Wyślij prawdziwe dane z GAS do sidepanel
         if (result.success) {
-          console.log(`[Background] ✅ AUTO-FETCH COMPLETE: ${totalTime.toFixed(0)}ms`);
+          console.log(`[Background] ✅ AUTO-FETCH-FULL COMPLETE: ${totalTime.toFixed(0)}ms, ${result.plainBody?.length || 0} chars`);
           if (backgroundLogger) {
-            backgroundLogger.info('📊 AUTO-FETCH Total Time', {
+            backgroundLogger.info('📊 AUTO-FETCH-FULL Total Time', {
               totalTime: `${totalTime.toFixed(0)}ms`,
-              messageId: message.data.messageId
+              messageId: message.data.messageId,
+              bodyLength: result.plainBody?.length || 0,
+              attachments: result.attachments?.length || 0
             });
           }
+          
+          // Wyślij dane wiadomości do sidepanel
           chrome.runtime.sendMessage({
             type: 'auto-mail-data',
             data: result
           }).catch(() => {});
+          
+          // KROK 2: Thread Intelligence - sprawdź messageCount (szybko, 20-50ms)
+          const metadataStart = performance.now();
+          console.log('[Background] 🧠 Thread Intelligence: sprawdzam messageCount...');
+          
+          callGAS('get-thread-metadata', {
+            messageId: message.data.messageId
+          }).then(metadata => {
+            const metadataTime = performance.now() - metadataStart;
+            if (metadata.success) {
+              console.log(`[Background] 📊 Thread metadata: ${metadataTime.toFixed(0)}ms, messageCount=${metadata.messageCount}`);
+              if (backgroundLogger) {
+                backgroundLogger.info('📊 Thread Metadata Check', {
+                  fetchTime: `${metadataTime.toFixed(0)}ms`,
+                  messageCount: metadata.messageCount,
+                  hasMultipleMessages: metadata.hasMultipleMessages
+                });
+              }
+              
+              // Wyślij metadata do sidepanel
+              chrome.runtime.sendMessage({
+                type: 'thread-metadata',
+                data: metadata
+              }).catch(() => {});
+            }
+          });
         } else {
-          console.error('[Background] Auto-fetch failed:', result.error);
+          console.error('[Background] Auto-fetch-full failed:', result.error);
         }
       });
+    } else if (!AUTO_FETCH_ENABLED && message.data.stan === 'mail_opened') {
+      console.log('[Background] ⏸️ AUTO-FETCH wyłączony (ustaw AUTO_FETCH_ENABLED = true aby włączyć)');
     }
     
     sendResponse({ success: true });
@@ -145,35 +179,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse(currentState);
   }
   
-  // ========== ETAP 2: Manual fetch - pełna wiadomość ==========
+  // ========== ETAP 2*: Manual-fetch-message USUNIĘTE ==========
+  // AUTO-FETCH teraz pobiera pełną wiadomość, więc manual-message nie jest potrzebny
   if (message.type === 'manual-fetch-message') {
-    const manualMsgStart = performance.now();
-    console.log('[Background] 🔵 MANUAL-MESSAGE-FETCH START:', message.messageId);
-    
-    callGAS('fetch-message-full', {
-      messageId: message.messageId,
-      threadId: message.threadId
-    }).then(result => {
-      const totalTime = performance.now() - manualMsgStart;
-      // Wyślij prawdziwe dane z GAS do sidepanel
-      if (result.success) {
-        console.log(`[Background] ✅ MANUAL-MESSAGE-FETCH COMPLETE: ${totalTime.toFixed(0)}ms`);
-        if (backgroundLogger) {
-          backgroundLogger.info('📊 MANUAL-MESSAGE-FETCH Total Time', {
-            totalTime: `${totalTime.toFixed(0)}ms`,
-            messageId: message.messageId
-          });
-        }
-        chrome.runtime.sendMessage({
-          type: 'full-message-ready',
-          data: result
-        }).catch(() => {});
-      } else {
-        console.error('[Background] Manual-fetch-message failed:', result.error);
-      }
-    });
-    
-    sendResponse({ success: true });
+    console.log('[Background] ⚠️ manual-fetch-message NIE UŻYWANE (auto-fetch pobiera pełną wiadomość)');
+    sendResponse({ success: false, info: 'Użyj auto-fetch lub manual-fetch-thread' });
   }
   
   // ========== ETAP 2: Manual fetch - pełny wątek ==========
@@ -224,7 +234,7 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
 // chrome.action.onClicked.addListener(...) <- TO BYŁO ZŁE
 
 
-console.log('[Background] Service worker uruchomiony (ETAP 1 + ETAP 2)');
+console.log('[Background] Service worker uruchomiony (ETAP 2*: Auto-Full + Manual-Thread)');
 if (backgroundLogger) {
-  backgroundLogger.info('Service worker uruchomiony (ETAP 1 + ETAP 2)');
+  backgroundLogger.info('Service worker uruchomiony (ETAP 2*: Auto-Full + Manual-Thread)');
 }

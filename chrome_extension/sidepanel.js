@@ -14,8 +14,23 @@ const statusElement = document.getElementById('status');
 const fetchedDataSection = document.getElementById('fetchedDataSection');
 const fetchedData = document.getElementById('fetchedData');
 
+// ETAP 2*: Przycisk pobierania wątku
+const fetchThreadBtn = document.getElementById('fetchThreadBtn');
+
 // ETAP 2: Przechowuje aktualny stan (aby ignorować nieaktualne dane)
 let currentState = null;
+
+// ETAP 2*: Thread Intelligence - state machine
+let threadState = {
+  currentView: 'auto',  // 'auto' | 'message' | 'thread'
+  currentMessageId: null,
+  currentThreadId: null,
+  messageMetadataLoaded: false,
+  threadMetadataLoaded: false,
+  threadFullLoaded: false,
+  messageCount: 0,
+  cachedThreads: {}  // { threadId: data }
+};
 
 // ETAP 2*: Funkcja czyszcząca sekcję wyników
 function resetFetchedData() {
@@ -26,6 +41,23 @@ function resetFetchedData() {
     fetchedDataSection.style.display = 'none';
   }
   console.log('[Sidepanel] Wyczyszczono sekcję pobranych danych');
+}
+
+// ETAP 2*: Thread Intelligence - reset state
+function resetThreadState() {
+  threadState.messageMetadataLoaded = false;
+  threadState.threadMetadataLoaded = false;
+  threadState.threadFullLoaded = false;
+  threadState.messageCount = 0;
+  threadState.currentView = 'auto';
+  
+  // Reset przycisku
+  if (fetchThreadBtn) {
+    fetchThreadBtn.textContent = '🧵 Pobierz cały wątek';
+    fetchThreadBtn.disabled = false;
+  }
+  
+  console.log('[Sidepanel] 🧠 Thread state zresetowany');
 }
 
 // Mapowanie stanów na czytelne nazwy
@@ -62,7 +94,12 @@ function updateUI(state) {
   // ETAP 2*: Wyczyść wyniki jeśli zmienił się kontekst
   if (shouldReset) {
     resetFetchedData();
+    resetThreadState();
   }
+  
+  // ETAP 2*: Zaktualizuj thread state IDs
+  threadState.currentMessageId = state?.messageId || null;
+  threadState.currentThreadId = state?.threadId || null;
 
   if (!state) {
     // Brak stanu - nie jesteśmy w Gmail lub jeszcze nie wykryto
@@ -87,11 +124,19 @@ function updateUI(state) {
     messageIdElement.style.fontWeight = 'normal';
   }
 
-  // Aktualizuj threadId (używamy textContent żeby nie usuwać click listener)
+  // Aktualizuj threadId
   if (state.threadId) {
     threadIdElement.textContent = state.threadId;
+    // ETAP 2*: Pokaż przycisk pobierania wątku
+    if (fetchThreadBtn) {
+      fetchThreadBtn.style.display = 'block';
+    }
   } else {
     threadIdElement.textContent = '-';
+    // ETAP 2*: Ukryj przycisk pobierania wątku
+    if (fetchThreadBtn) {
+      fetchThreadBtn.style.display = 'none';
+    }
   }
 
   console.log('[Sidepanel] Zaktualizowano UI stanem:', state);
@@ -136,47 +181,44 @@ function displayFetchedData(data, type) {
   }
 }
 
-// ETAP 2: Obsługa kliknięcia w Message ID
-messageIdElement.addEventListener('click', () => {
-  if (!currentState || !currentState.messageId) {
-    console.log('[Sidepanel] Brak messageId do pobrania');
-    return;
-  }
+// ETAP 2*: Message ID i Thread ID = tylko wyświetlanie (NIE przyciski)
+// AUTO-FETCH pobiera pełną wiadomość automatycznie
 
-  console.log('[Sidepanel] Kliknięto Message ID - żądanie pełnej wiadomości:', currentState.messageId);
-  chrome.runtime.sendMessage({
-    type: 'manual-fetch-message',
-    messageId: currentState.messageId,
-    threadId: currentState.threadId
-  }).catch(err => {
-    console.log('[Sidepanel] Błąd wysyłania manual-fetch-message:', err.message);
-  });
-
-  // Wizualna informacja
-  fetchedData.textContent = '⏳ Pobieranie pełnej wiadomości...';
-  fetchedDataSection.style.display = 'block';
-});
-
-// ETAP 2: Obsługa kliknięcia w Thread ID
-if (threadIdElement) {
-  threadIdElement.addEventListener('click', () => {
-    console.log('[Sidepanel] CLICK na Thread ID - currentState:', currentState);
+// ETAP 2*: Obsługa przycisku "Pobierz cały wątek" + Thread Intelligence
+if (fetchThreadBtn) {
+  fetchThreadBtn.addEventListener('click', () => {
+    console.log('[Sidepanel] 🧵 CLICK na przycisk Pobierz wątek');
     
     if (!currentState || !currentState.threadId) {
-      console.log('[Sidepanel] Brak threadId do pobrania');
+      console.log('[Sidepanel] ⚠️ Brak threadId do pobrania');
       return;
     }
 
-    console.log('[Sidepanel] Kliknięto Thread ID - żądanie pełnego wątku:', currentState.threadId, 'messageId:', currentState.messageId);
+    // Thread Intelligence: Sprawdź cache
+    if (threadState.threadFullLoaded && threadState.cachedThreads[currentState.threadId]) {
+      console.log('[Sidepanel] 💾 Wątek już pobrany - wyświetlam z cache');
+      displayFetchedData(threadState.cachedThreads[currentState.threadId], 'thread');
+      return;
+    }
+
+    // Thread Intelligence: Sprawdź messageCount
+    if (threadState.threadMetadataLoaded && threadState.messageCount === 1) {
+      console.log('[Sidepanel] ℹ️ Ten wątek ma tylko 1 wiadomość - pełny widok nie jest potrzebny');
+      fetchedDataSection.style.display = 'block';
+      fetchedData.textContent = 'ℹ️ Ten wątek zawiera tylko jedną wiadomość.\n\nPełna treść jest już wyświetlona powyżej (AUTO-FETCH).\nPobieranie całego wątku nie wniesie dodatkowych danych.';
+      return;
+    }
+
+    console.log('[Sidepanel] 🚀 Pobieranie pełnego wątku:', currentState.threadId, 'messageCount:', threadState.messageCount);
     
     chrome.runtime.sendMessage({
       type: 'manual-fetch-thread',
       threadId: currentState.threadId,
       messageId: currentState.messageId
     }).then(response => {
-      console.log('[Sidepanel] Odpowiedź z background (manual-fetch-thread):', response);
+      console.log('[Sidepanel] ✅ Odpowiedź z background (manual-fetch-thread):', response);
     }).catch(err => {
-      console.log('[Sidepanel] Błąd wysyłania manual-fetch-thread:', err.message);
+      console.log('[Sidepanel] ❌ Błąd wysyłania manual-fetch-thread:', err.message);
     });
 
     // Wizualna informacja
@@ -187,9 +229,9 @@ if (threadIdElement) {
       fetchedDataSection.style.display = 'block';
     }
   });
-  console.log('[Sidepanel] Click listener dodany do Thread ID');
+  console.log('[Sidepanel] ✅ Click listener dodany do przycisku Pobierz wątek');
 } else {
-  console.error('[Sidepanel] threadIdElement nie znaleziony!');
+  console.error('[Sidepanel] ❌ fetchThreadBtn nie znaleziony!');
 }
 
 // Nasłuchuj na wiadomości od background.js
@@ -200,21 +242,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     updateUI(message.data);
   }
 
-  // ETAP 2: Auto-fetch (szybki podgląd)
+  // ETAP 2*: Auto-fetch (pełna wiadomość)
   if (message.type === 'auto-mail-data') {
-    console.log('[Sidepanel] Otrzymano auto-fetch data:', message.data);
+    console.log('[Sidepanel] Otrzymano auto-fetch FULL data:', message.data);
+    threadState.messageMetadataLoaded = true;
+    threadState.currentView = 'auto';
     displayFetchedData(message.data, 'message');
   }
 
-  // ETAP 2: Manual message fetch (pełne dane)
-  if (message.type === 'full-message-ready') {
-    console.log('[Sidepanel] Otrzymano full-message-ready:', message.data);
-    displayFetchedData(message.data, 'message');
+  // ETAP 2*: Thread Intelligence - metadata (messageCount)
+  if (message.type === 'thread-metadata') {
+    console.log('[Sidepanel] 🧠 Otrzymano thread metadata:', message.data);
+    threadState.threadMetadataLoaded = true;
+    threadState.messageCount = message.data.messageCount || 0;
+    
+    // Zaktualizuj tekst przycisku
+    if (fetchThreadBtn && message.data.messageCount > 1) {
+      fetchThreadBtn.textContent = `🧵 Pobierz cały wątek (${message.data.messageCount} wiadomości)`;
+      fetchThreadBtn.disabled = false;
+    } else if (fetchThreadBtn && message.data.messageCount === 1) {
+      fetchThreadBtn.textContent = `ℹ️ Wątek ma tylko 1 wiadomość`;
+      fetchThreadBtn.disabled = true;
+    }
   }
 
-  // ETAP 2: Manual thread fetch (pełny wątek)
+  // ETAP 2*: Manual thread fetch (pełny wątek) - jedyny manual fetch
   if (message.type === 'full-thread-ready') {
     console.log('[Sidepanel] Otrzymano full-thread-ready:', message.data);
+    threadState.threadFullLoaded = true;
+    threadState.currentView = 'thread';
+    
+    // Cache thread data
+    if (currentState?.threadId) {
+      threadState.cachedThreads[currentState.threadId] = message.data;
+      console.log('[Sidepanel] 💾 Wątek zapisany w cache:', currentState.threadId);
+    }
+    
     displayFetchedData(message.data, 'thread');
   }
   
@@ -232,5 +295,5 @@ chrome.runtime.sendMessage({
   console.log('[Sidepanel] Błąd pobierania stanu:', err.message);
 });
 
-console.log('[Sidepanel] Zainicjalizowano (ETAP 1 + ETAP 2)');
-sidepanelLogger.info('Sidepanel zainicjalizowano (ETAP 1 + ETAP 2)');
+console.log('[Sidepanel] Zainicjalizowano (ETAP 2*: Auto-Full + Manual-Thread)');
+sidepanelLogger.info('Sidepanel zainicjalizowano (ETAP 2*: Auto-Full + Manual-Thread)');
