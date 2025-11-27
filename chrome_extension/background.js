@@ -28,6 +28,70 @@ const GAS_WEB_APP_URL_FOR_FETCH = typeof GAS_WEB_APP_URL !== 'undefined'
 // ETAP 2*: Konfiguracja auto-fetch (true = włączony, false = wyłączony)
 const AUTO_FETCH_ENABLED = true;
 
+// ETAP 2*: Dwuwarstwowy cache (pamięć + chrome.storage.local)
+let threadCache = {};   // { threadId: { messageIds: [], lastSyncedAt: timestamp } }
+let messageCache = {};  // { messageId: { threadId, processed, hasAnalysis, lastFetchedAt } }
+
+// ETAP 2*: Funkcje zarządzania cache
+async function loadCacheFromStorage() {
+  try {
+    const result = await chrome.storage.local.get(['threadCache', 'messageCache']);
+    threadCache = result.threadCache || {};
+    messageCache = result.messageCache || {};
+    console.log('[Background] 💾 Cache załadowany z storage:', {
+      threads: Object.keys(threadCache).length,
+      messages: Object.keys(messageCache).length
+    });
+    if (backgroundLogger) {
+      backgroundLogger.info('Cache załadowany', {
+        threadCount: Object.keys(threadCache).length,
+        messageCount: Object.keys(messageCache).length
+      });
+    }
+  } catch (error) {
+    console.error('[Background] Błąd ładowania cache:', error);
+  }
+}
+
+async function saveCacheToStorage() {
+  try {
+    await chrome.storage.local.set({
+      threadCache: threadCache,
+      messageCache: messageCache
+    });
+    const stats = {
+      threads: Object.keys(threadCache).length,
+      messages: Object.keys(messageCache).length,
+      processed: Object.values(messageCache).filter(m => m.processed).length
+    };
+    console.log('[Background] 💾 Cache zapisany do storage:', stats);
+    if (backgroundLogger) {
+      backgroundLogger.info('💾 Cache zapisany', stats);
+    }
+  } catch (error) {
+    console.error('[Background] Błąd zapisywania cache:', error);
+  }
+}
+
+function updateMessageCache(messageId, threadId, processed = true) {
+  messageCache[messageId] = {
+    threadId: threadId,
+    processed: processed,
+    hasAnalysis: false,
+    lastFetchedAt: Date.now()
+  };
+}
+
+function updateThreadCache(threadId, messageIds, hasFullThreadFetched = false) {
+  const existing = threadCache[threadId] || {};
+  threadCache[threadId] = {
+    messageIds: messageIds,
+    lastSyncedAt: Date.now(),
+    // Jeśli wcześniej mieliśmy info że pełny wątek był pobrany, zachowaj je
+    hasFullThreadFetched: existing.hasFullThreadFetched || hasFullThreadFetched
+  };
+}
+
 // ETAP 2: Funkcja wywołująca GAS WebApp
 async function callGAS(action, params) {
   const startTime = performance.now();
@@ -109,62 +173,118 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.log('[Background] Sidepanel nie jest otwarty');
     });
     
-    // ETAP 2*: AUTO-FETCH gdy mail_opened (opcjonalny, ZAWSZE pełna wiadomość)
+    // ETAP 2*: AUTO-FETCH gdy mail_opened (z cache)
     if (AUTO_FETCH_ENABLED && message.data.stan === 'mail_opened' && message.data.messageId) {
       const autoFetchStart = performance.now();
-      console.log('[Background] 🚀 AUTO-FETCH-FULL START:', message.data.messageId);
+      const msgId = message.data.messageId;
+      const tId = message.data.threadId;
       
-      // KROK 1: Pobierz pełną wiadomość
-      callGAS('fetch-message-full', {
-        messageId: message.data.messageId,
-        threadId: message.data.threadId
-      }).then(result => {
+      console.log('[Background] 🚀 AUTO-FETCH-FULL START:', msgId);
+      
+      // KROK 1: Sprawdź messageCache
+      const cached = messageCache[msgId];
+      const shouldFetch = !cached || !cached.processed;
+      
+      if (cached && cached.processed) {
+        console.log('[Background] 💾 Wiadomość już pobrana (cache), skip fetch:', msgId);
+        if (backgroundLogger) {
+          backgroundLogger.info('💾 Message w cache - skip fetch', {
+            messageId: msgId,
+            lastFetchedAt: new Date(cached.lastFetchedAt).toISOString()
+          });
+        }
+      }
+      
+      // KROK 1A: Pobierz pełną wiadomość (jeśli nie w cache)
+      const fetchPromise = shouldFetch 
+        ? callGAS('fetch-message-full', { messageId: msgId, threadId: tId })
+        : Promise.resolve(null);
+      
+      fetchPromise.then(result => {
         const totalTime = performance.now() - autoFetchStart;
-        if (result.success) {
+        
+        if (result && result.success) {
           console.log(`[Background] ✅ AUTO-FETCH-FULL COMPLETE: ${totalTime.toFixed(0)}ms, ${result.plainBody?.length || 0} chars`);
           if (backgroundLogger) {
             backgroundLogger.info('📊 AUTO-FETCH-FULL Total Time', {
               totalTime: `${totalTime.toFixed(0)}ms`,
-              messageId: message.data.messageId,
+              messageId: msgId,
               bodyLength: result.plainBody?.length || 0,
               attachments: result.attachments?.length || 0
             });
           }
+          
+          // Aktualizuj messageCache
+          updateMessageCache(msgId, tId, true);
+          saveCacheToStorage();
           
           // Wyślij dane wiadomości do sidepanel
           chrome.runtime.sendMessage({
             type: 'auto-mail-data',
             data: result
           }).catch(() => {});
-          
-          // KROK 2: Thread Intelligence - sprawdź messageCount (szybko, 20-50ms)
-          const metadataStart = performance.now();
-          console.log('[Background] 🧠 Thread Intelligence: sprawdzam messageCount...');
-          
-          callGAS('get-thread-metadata', {
-            messageId: message.data.messageId
-          }).then(metadata => {
-            const metadataTime = performance.now() - metadataStart;
-            if (metadata.success) {
-              console.log(`[Background] 📊 Thread metadata: ${metadataTime.toFixed(0)}ms, messageCount=${metadata.messageCount}`);
-              if (backgroundLogger) {
-                backgroundLogger.info('📊 Thread Metadata Check', {
-                  fetchTime: `${metadataTime.toFixed(0)}ms`,
-                  messageCount: metadata.messageCount,
-                  hasMultipleMessages: metadata.hasMultipleMessages
-                });
-              }
-              
-              // Wyślij metadata do sidepanel
-              chrome.runtime.sendMessage({
-                type: 'thread-metadata',
-                data: metadata
-              }).catch(() => {});
-            }
-          });
-        } else {
-          console.error('[Background] Auto-fetch-full failed:', result.error);
         }
+        
+        // KROK 2: Thread Intelligence - pobierz listę messageIds w wątku
+        const metadataStart = performance.now();
+        console.log('[Background] 🧠 Thread Intelligence: pobieram listę messageIds...');
+        
+        callGAS('get-thread-metadata', {
+          messageId: msgId
+        }).then(metadata => {
+          const metadataTime = performance.now() - metadataStart;
+          if (metadata.success) {
+            console.log(`[Background] 📊 Thread metadata: ${metadataTime.toFixed(0)}ms, messageCount=${metadata.messageCount}`);
+            if (backgroundLogger) {
+              backgroundLogger.info('📊 Thread Metadata Check', {
+                fetchTime: `${metadataTime.toFixed(0)}ms`,
+                messageCount: metadata.messageCount,
+                hasMultipleMessages: metadata.hasMultipleMessages
+              });
+            }
+            
+            // KROK 3: Aktualizuj threadCache (jeśli zwraca messageIds)
+            if (metadata.messageIds && Array.isArray(metadata.messageIds)) {
+              const oldIds = threadCache[tId]?.messageIds || [];
+              const newIds = metadata.messageIds;
+              
+              // Dodaj nowe messageIds do messageCache
+              newIds.forEach(id => {
+                if (!messageCache[id]) {
+                  messageCache[id] = {
+                    threadId: tId,
+                    processed: false,
+                    hasAnalysis: false,
+                    lastFetchedAt: null
+                  };
+                }
+              });
+              
+              // Aktualizuj threadCache (bez oznaczania pełnego pobrania wątku)
+              updateThreadCache(tId, newIds, false);
+              
+              console.log(`[Background] 📝 Thread cache zaktualizowany: ${oldIds.length} → ${newIds.length} messages`);
+            } else {
+              // Fallback - jeśli GAS nie zwraca messageIds, zapisz tylko metadata
+              if (!threadCache[tId]) {
+                updateThreadCache(tId, [msgId]);
+              }
+            }
+            
+            saveCacheToStorage();
+            
+            // Dodaj informację czy wątek był kiedyś pobrany jako pełny
+            const threadEntry = threadCache[tId];
+            metadata.uiThreadId = tId;
+            metadata.wasFullThreadFetched = !!(threadEntry && threadEntry.hasFullThreadFetched);
+            
+            // Wyślij metadata do sidepanel
+            chrome.runtime.sendMessage({
+              type: 'thread-metadata',
+              data: metadata
+            }).catch(() => {});
+          }
+        });
       });
     } else if (!AUTO_FETCH_ENABLED && message.data.stan === 'mail_opened') {
       console.log('[Background] ⏸️ AUTO-FETCH wyłączony (ustaw AUTO_FETCH_ENABLED = true aby włączyć)');
@@ -186,28 +306,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ success: false, info: 'Użyj auto-fetch lub manual-fetch-thread' });
   }
   
-  // ========== ETAP 2: Manual fetch - pełny wątek ==========
+  // ========== ETAP 2*: Manual fetch - pełny wątek (z cache) ==========
   if (message.type === 'manual-fetch-thread') {
     const manualThreadStart = performance.now();
-    console.log('[Background] 🧵 MANUAL-THREAD-FETCH START:', message.threadId, 'messageId:', message.messageId);
+    const tId = message.threadId;
+    const msgId = message.messageId || currentState?.messageId;
+    
+    console.log('[Background] 🧵 MANUAL-THREAD-FETCH START:', tId, 'messageId:', msgId);
     
     callGAS('fetch-thread-full', {
-      threadId: message.threadId,
-      messageId: message.messageId || currentState?.messageId
+      threadId: tId,
+      messageId: msgId
     }).then(result => {
       const totalTime = performance.now() - manualThreadStart;
       console.log('[Background] ⭐ Odpowiedź z GAS (fetch-thread-full):', result);
       
-      // Wyślij prawdziwe dane z GAS do sidepanel
       if (result.success) {
         console.log(`[Background] ✅ MANUAL-THREAD-FETCH COMPLETE: ${totalTime.toFixed(0)}ms, ${result.messageCount || 0} messages`);
         if (backgroundLogger) {
           backgroundLogger.info('📊 MANUAL-THREAD-FETCH Total Time', {
             totalTime: `${totalTime.toFixed(0)}ms`,
             messageCount: result.messageCount || 0,
-            threadId: message.threadId
+            threadId: tId
           });
         }
+        
+        // KROK 1: Zbuduj listę messageIds z result.messages[]
+        const messageIds = result.messages ? result.messages.map(msg => msg.messageId) : [msgId];
+        // Oznacz, że pełny wątek został pobrany (hasFullThreadFetched = true)
+        updateThreadCache(tId, messageIds, true);
+        
+        console.log(`[Background] 📝 Thread cache zaktualizowany: ${messageIds.length} messages dla ${tId}`);
+        
+        // KROK 2: Dla każdej wiadomości zaktualizuj messageCache
+        if (result.messages && Array.isArray(result.messages)) {
+          result.messages.forEach(msg => {
+            if (msg.messageId) {
+              updateMessageCache(msg.messageId, tId, true);
+            }
+          });
+          console.log(`[Background] 📝 Message cache zaktualizowany: ${result.messages.length} wiadomości`);
+        }
+        
+        // Zapisz cache
+        saveCacheToStorage();
+        
         console.log('[Background] ⭐ Wysyłam full-thread-ready do sidepanel');
         chrome.runtime.sendMessage({
           type: 'full-thread-ready',
@@ -238,3 +381,6 @@ console.log('[Background] Service worker uruchomiony (ETAP 2*: Auto-Full + Manua
 if (backgroundLogger) {
   backgroundLogger.info('Service worker uruchomiony (ETAP 2*: Auto-Full + Manual-Thread)');
 }
+
+// ETAP 2*: Załaduj cache z storage przy starcie
+loadCacheFromStorage();

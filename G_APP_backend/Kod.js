@@ -66,7 +66,7 @@ function saveLogToDrive(logData) {
 
 // ========== ETAP 2: Gmail API Fetch Functions ==========
 
-// ETAP 2*: Thread Intelligence - szybkie sprawdzenie liczby wiadomości (20-50ms)
+// ETAP 2*: Thread Intelligence - szybkie sprawdzenie + lista messageIds (20-50ms)
 function getThreadMetadata(messageId) {
   try {
     if (!messageId || messageId.trim() === '') {
@@ -98,13 +98,20 @@ function getThreadMetadata(messageId) {
     
     // SZYBKIE wywołanie - tylko metadata, bez ciał wiadomości
     const messageCount = thread.getMessageCount();
+    const messages = thread.getMessages(); // Obiekty wiadomości (bez pobierania ciał)
+    
+    // Wyciągnij messageIds
+    const messageIds = messages.map(function(msg) {
+      return msg.getId();
+    });
     
     return {
       success: true,
       messageId: messageId,
       threadId: thread.getId(), // Prawdziwy thread ID z API
       messageCount: messageCount,
-      hasMultipleMessages: messageCount > 1
+      hasMultipleMessages: messageCount > 1,
+      messageIds: messageIds  // Lista wszystkich messageIds w wątku
     };
     
   } catch (error) {

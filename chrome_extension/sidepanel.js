@@ -29,6 +29,8 @@ let threadState = {
   threadMetadataLoaded: false,
   threadFullLoaded: false,
   messageCount: 0,
+  // Czy ten wątek był kiedyś pobierany jako pełny (z background cache)
+  hasFullThreadFetchedBefore: false,
   cachedThreads: {}  // { threadId: data }
 };
 
@@ -49,6 +51,7 @@ function resetThreadState() {
   threadState.threadMetadataLoaded = false;
   threadState.threadFullLoaded = false;
   threadState.messageCount = 0;
+  threadState.hasFullThreadFetchedBefore = false;
   threadState.currentView = 'auto';
   
   // Reset przycisku
@@ -255,10 +258,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[Sidepanel] 🧠 Otrzymano thread metadata:', message.data);
     threadState.threadMetadataLoaded = true;
     threadState.messageCount = message.data.messageCount || 0;
+    threadState.hasFullThreadFetchedBefore = !!message.data.wasFullThreadFetched;
     
     // Zaktualizuj tekst przycisku
     if (fetchThreadBtn && message.data.messageCount > 1) {
-      fetchThreadBtn.textContent = `🧵 Pobierz cały wątek (${message.data.messageCount} wiadomości)`;
+      let label = `🧵 Pobierz cały wątek (${message.data.messageCount} wiadomości)`;
+      if (threadState.hasFullThreadFetchedBefore) {
+        label += ' – już kiedyś pobrany';
+      }
+      fetchThreadBtn.textContent = label;
       fetchThreadBtn.disabled = false;
     } else if (fetchThreadBtn && message.data.messageCount === 1) {
       fetchThreadBtn.textContent = `ℹ️ Wątek ma tylko 1 wiadomość`;
