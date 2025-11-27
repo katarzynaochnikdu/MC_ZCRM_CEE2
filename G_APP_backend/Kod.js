@@ -66,7 +66,7 @@ function saveLogToDrive(logData) {
 
 // ========== ETAP 2: Gmail API Fetch Functions ==========
 
-// Funkcja do pobrania minimalnych danych wiadomości (auto-fetch)
+// Funkcja do pobrania pełnej wiadomości (auto-fetch) - BEZ snippet, wszystko jako FULL
 function fetchMessageSimple(messageId, threadId) {
   try {
     const message = GmailApp.getMessageById(messageId);
@@ -84,8 +84,10 @@ function fetchMessageSimple(messageId, threadId) {
       threadId: threadId,
       subject: message.getSubject(),
       from: message.getFrom(),
+      to: message.getTo(),
       date: message.getDate().toISOString(),
-      snippet: message.getPlainBody().substring(0, 200)
+      plainBody: message.getPlainBody(),  // PEŁNA treść bez obcinania
+      bodyLength: message.getPlainBody().length
     };
     
   } catch (error) {

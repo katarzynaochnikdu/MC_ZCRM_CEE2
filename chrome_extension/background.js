@@ -27,6 +27,7 @@ const GAS_WEB_APP_URL_FOR_FETCH = typeof GAS_WEB_APP_URL !== 'undefined'
 
 // ETAP 2: Funkcja wywołująca GAS WebApp
 async function callGAS(action, params) {
+  const startTime = performance.now();
   try {
     const response = await fetch(GAS_WEB_APP_URL_FOR_FETCH, {
       method: 'POST',
@@ -40,6 +41,7 @@ async function callGAS(action, params) {
     // Sprawdź Content-Type
     const contentType = response.headers.get('content-type') || '';
     const text = await response.text();
+    const fetchTime = performance.now() - startTime;
     
     // Jeśli odpowiedź to HTML (błąd lub strona logowania)
     if (contentType.includes('text/html') || text.trim().startsWith('<')) {
@@ -53,17 +55,27 @@ async function callGAS(action, params) {
 
     // Próbuj odczytać odpowiedź JSON
     const data = JSON.parse(text);
+    const dataSize = new Blob([text]).size;
     
-    console.log(`[Background] Odpowiedź z GAS (${action}):`, data);
+    console.log(`[Background] Odpowiedź z GAS (${action}): ${fetchTime.toFixed(0)}ms, ${dataSize} bytes`, data);
     if (backgroundLogger) {
-      backgroundLogger.info(`Odpowiedź z GAS (${action})`, data);
+      backgroundLogger.info(`📊 Performance GAS (${action})`, {
+        fetchTime: `${fetchTime.toFixed(0)}ms`,
+        dataSize: `${dataSize} bytes`,
+        messageId: params.messageId || '-',
+        threadId: params.threadId || '-'
+      });
     }
 
     return data;
   } catch (error) {
-    console.error(`[Background] Błąd wywołania GAS (${action}):`, error);
+    const fetchTime = performance.now() - startTime;
+    console.error(`[Background] Błąd wywołania GAS (${action}) po ${fetchTime.toFixed(0)}ms:`, error);
     if (backgroundLogger) {
-      backgroundLogger.error(`Błąd wywołania GAS (${action})`, { error: error.toString() });
+      backgroundLogger.error(`Błąd wywołania GAS (${action})`, { 
+        error: error.toString(),
+        fetchTime: `${fetchTime.toFixed(0)}ms`
+      });
     }
     
     // Zwróć mock data jeśli GAS nie odpowiada
@@ -96,15 +108,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     
     // ETAP 2: AUTO-FETCH gdy mail_opened
     if (message.data.stan === 'mail_opened' && message.data.messageId) {
-      console.log('[Background] Auto-fetch dla mail_opened:', message.data.messageId);
+      const autoFetchStart = performance.now();
+      console.log('[Background] 🚀 AUTO-FETCH START:', message.data.messageId);
       
       // Wywołaj GAS (async)
       callGAS('fetch-message-simple', {
         messageId: message.data.messageId,
         threadId: message.data.threadId
       }).then(result => {
+        const totalTime = performance.now() - autoFetchStart;
         // Wyślij prawdziwe dane z GAS do sidepanel
         if (result.success) {
+          console.log(`[Background] ✅ AUTO-FETCH COMPLETE: ${totalTime.toFixed(0)}ms`);
+          if (backgroundLogger) {
+            backgroundLogger.info('📊 AUTO-FETCH Total Time', {
+              totalTime: `${totalTime.toFixed(0)}ms`,
+              messageId: message.data.messageId
+            });
+          }
           chrome.runtime.sendMessage({
             type: 'auto-mail-data',
             data: result
@@ -126,14 +147,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
   // ========== ETAP 2: Manual fetch - pełna wiadomość ==========
   if (message.type === 'manual-fetch-message') {
-    console.log('[Background] Manual-fetch-message:', message.messageId);
+    const manualMsgStart = performance.now();
+    console.log('[Background] 🔵 MANUAL-MESSAGE-FETCH START:', message.messageId);
     
     callGAS('fetch-message-full', {
       messageId: message.messageId,
       threadId: message.threadId
     }).then(result => {
+      const totalTime = performance.now() - manualMsgStart;
       // Wyślij prawdziwe dane z GAS do sidepanel
       if (result.success) {
+        console.log(`[Background] ✅ MANUAL-MESSAGE-FETCH COMPLETE: ${totalTime.toFixed(0)}ms`);
+        if (backgroundLogger) {
+          backgroundLogger.info('📊 MANUAL-MESSAGE-FETCH Total Time', {
+            totalTime: `${totalTime.toFixed(0)}ms`,
+            messageId: message.messageId
+          });
+        }
         chrome.runtime.sendMessage({
           type: 'full-message-ready',
           data: result
@@ -148,16 +178,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
   // ========== ETAP 2: Manual fetch - pełny wątek ==========
   if (message.type === 'manual-fetch-thread') {
-    console.log('[Background] ⭐ Manual-fetch-thread otrzymane:', message.threadId, 'messageId:', message.messageId);
+    const manualThreadStart = performance.now();
+    console.log('[Background] 🧵 MANUAL-THREAD-FETCH START:', message.threadId, 'messageId:', message.messageId);
     
     callGAS('fetch-thread-full', {
       threadId: message.threadId,
       messageId: message.messageId || currentState?.messageId
     }).then(result => {
+      const totalTime = performance.now() - manualThreadStart;
       console.log('[Background] ⭐ Odpowiedź z GAS (fetch-thread-full):', result);
       
       // Wyślij prawdziwe dane z GAS do sidepanel
       if (result.success) {
+        console.log(`[Background] ✅ MANUAL-THREAD-FETCH COMPLETE: ${totalTime.toFixed(0)}ms, ${result.messageCount || 0} messages`);
+        if (backgroundLogger) {
+          backgroundLogger.info('📊 MANUAL-THREAD-FETCH Total Time', {
+            totalTime: `${totalTime.toFixed(0)}ms`,
+            messageCount: result.messageCount || 0,
+            threadId: message.threadId
+          });
+        }
         console.log('[Background] ⭐ Wysyłam full-thread-ready do sidepanel');
         chrome.runtime.sendMessage({
           type: 'full-thread-ready',

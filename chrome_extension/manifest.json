@@ -22,7 +22,8 @@
   ],
   "host_permissions": [
     "https://mail.google.com/*",
-    "https://script.google.com/*"
+    "https://script.google.com/*",
+    "https://www.googletagmanager.com/*"
   ],
   "background": {
     "service_worker": "background.js"
