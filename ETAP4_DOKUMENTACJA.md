@@ -735,12 +735,14 @@ if (message.type === 'analysis-error') {
 
 ETAP 4.1 rozszerza ETAP 4.0 o **prawdziwą integrację z Gemini 2.5 Pro** przez Cloud Run.
 
+**Ważne (narracja systemu):** “Analiza LLM” nie jest faktem, tylko **najlepszą możliwą interpretacją treści maila** wykonaną przez **model klasy enterprise**, w narzuconym kontrakcie JSON. To tłumaczy, czemu wynik może różnić się od CRM (CRM = dane historyczne/prawne/uzupełniane ręcznie; mail = źródło niepełne).
+
 **Co się zmieniło:**
 
 | Element | ETAP 4.0 (Mock) | ETAP 4.1 (Produkcja) |
 |---------|----------------|----------------------|
 | **Backend** | Mock JSON w GAS | Cloud Run (Node.js 20) + Vertex AI |
-| **Model AI** | Brak | Gemini 2.5 Pro / 2.0 Flash |
+| **Model AI** | Brak | Gemini 2.5 Pro |
 | **Storage** | `chrome.storage.local` | Firestore + `chrome.storage.local` |
 | **Prompt** | Brak | Pełny enterprise prompt (PROMPT.txt) |
 | **Security** | Brak | Secret Manager (GCP_API_GEMINI) |
@@ -1021,7 +1023,7 @@ function analyzeMessage(messageId, threadId) {
     ]
   },
   "analyzedAt": 1732752000000,
-  "geminiModel": "gemini-2.0-flash-exp",
+  "geminiModel": "gemini-2.5-pro",
   "processingTimeMs": 2345
 }
 ```
@@ -1152,7 +1154,7 @@ curl -X POST https://YOUR-CLOUD-RUN-URL/analyze \
 | **Prompt** | Brak | Pełny enterprise prompt |
 | **Koszty** | $0 | ~$6.25/1000 analiz (Gemini 2.5 Pro) |
 | **Czas analizy** | <100ms (mock) | 2-8s (Gemini 2.5 Pro) |
-| **Jakość** | Stała | Zależy od treści maila |
+| **Jakość** | Stała | Najlepsza interpretacja enterprise modelu w kontrakcie JSON (może różnić się od CRM) |
 
 ---
 
