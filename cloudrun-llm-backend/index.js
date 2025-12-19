@@ -98,6 +98,7 @@ Każdy obiekt ma format:
 {
   "company_name": "...",
   "company_friendly_name": "...",
+  "company_keyword": "...",
   "website": "...",
   "phone": "...",
   "email": "...",
@@ -107,6 +108,11 @@ Każdy obiekt ma format:
 Zasady dla firm:
 - company_name = pełna oficjalna nazwa organizacji.
 - company_friendly_name = nazwa marki/produktu lub wersja potoczna.
+- company_keyword = 1 (maks. 2) słowo kluczowe do wyszukiwania firmy w CRM:
+  - wybierz unikalny rdzeń nazwy (np. "RINGOSTAT", "SILCAN", "HOLLYWOOD"),
+  - NIE używaj ogólników (np. "MEDICAL", "CLINIC", "CENTER", "SP", "ZOO"),
+  - ma to być token do wyszukiwania typu contains/like; jeśli nie potrafisz wybrać sensownie → null,
+  - maksymalnie 2 słowa, rozdzielone spacją (jeśli 1 słowo byłoby zbyt ogólne).
 - website = główna domena firmowa (np. „firma.pl"), jeśli brak → null.
 - phone = jeden główny numer firmowy, nie osobisty; jeśli brak → null.
 - email = jeden główny adres firmowy typu info@ / office@ / contact@; jeśli brak → null.
@@ -128,7 +134,10 @@ Każdy obiekt:
   "email": "...",
   "company_name": "...",
   "salutation": "Pan" / "Pani" / null,
-  "contact_type": "Pracownik medyczny" / "Pracownik firmy" / "Pracownik stowarzyszeń i inne" / "Pracownik usługodawcy/dostawcy" / null
+  "contact_type": "Pracownik medyczny" / "Pracownik firmy" / "Pracownik stowarzyszeń i inne" / "Pracownik usługodawcy/dostawcy" / null,
+  "email_is_personal": true / false / null,
+  "company_nip": "..." / null,
+  "company_from_contact_context": true / false / null
 }
 
 Zasady dla kontaktów:
@@ -145,8 +154,24 @@ Zasady dla kontaktów:
   - "Pracownik stowarzyszeń i inne" gdy osoba reprezentuje stowarzyszenie, fundację, izbę, towarzystwo naukowe, uczelnię, urząd itp.
   - "Pracownik usługodawcy/dostawcy" gdy osoba reprezentuje dostawcę usług/technologii, operatora, software house, agencję, firmę wdrożeniową itp.
   - Jeśli nie masz wystarczających przesłanek → null (nie zgaduj).
+- email_is_personal:
+  - UWAGA: to pole NIE oznacza "email prywatny". To pole oznacza: "email imienny służbowy (bezpośredni do osoby) vs email ogólny/działowy".
+  - true tylko gdy email jest imienny ORAZ służbowy (bezpośredni do konkretnej osoby), np. imie.nazwisko@..., inicjal+nazwisko@... i domena wygląda na domenę organizacji (nie free-mail).
+  - false gdy email jest ogólny / działowy (np. info@, kontakt@, biuro@, sekretariat@, rejestracja@, recepcja@, office@, sales@, hr@).
+  - null gdy nie jesteś w stanie ocenić pewnie LUB gdy email wygląda na prywatny/free-mail (np. gmail.com, outlook.com, yahoo.com, wp.pl, o2.pl, interia.pl).
+- company_nip:
+  - jeśli w treści/signature/stopce w kontekście tego kontaktu pojawia się NIP/VAT/Tax ID powiązany z firmą tej osoby → wpisz (tylko cyfry),
+  - jeśli brak → null (nie zgaduj).
+- company_from_contact_context:
+  - true jeśli przypisanie company_name i/lub company_nip wynika bezpośrednio z kontekstu tej osoby (stopka, podpis, stanowisko, domena firmowa) a nie jest luźnym domysłem,
+  - false jeśli firma jest tylko luźno zasugerowana (np. temat maila) i nie ma jasnego powiązania z osobą,
+  - null jeśli nie jesteś pewien.
 
 Jedna osoba = jeden obiekt.
+
+Dodatkowa reguła anty-błąd (sekretariat):
+- Nie twórz kontaktu (contacts[]) jeśli NIE ma jednoznacznej osoby (brak imienia i nazwiska) i jedyny email jest ogólny/działowy (np. sekretariat@..., biuro@..., info@...).
+  Taki adres przypisz do firmy (companies[].email), a kontakt pomiń.
 
 5. Reguły ogólne
 

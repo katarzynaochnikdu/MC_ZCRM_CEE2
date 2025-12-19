@@ -3,6 +3,7 @@
 
 // NAZWA FOLDERU NA DRIVE (możesz zmienić)
 const LOG_FOLDER_NAME = 'ZCRM_CCE2_Logs';
+const ZOHO_CRM_API_VERSION = 'v8'; // używamy nowszej wersji API Zoho CRM (v8)
 
 // ========== ETAP B: Zoho CRM OAuth Refresh ==========
 
@@ -112,6 +113,62 @@ function callZohoApi(endpoint, method, body) {
   throw new Error('Zoho API error (' + code + '): ' + text);
 }
 
+/**
+ * Bezpieczny wrapper: buduje endpoint w formacie /crm/v8/...
+ * Uwaga: zostawiamy callZohoApi() jako bazę (obsługa 401 + token refresh).
+ */
+function callZohoApiV8(path, method, body) {
+  const version = ZOHO_CRM_API_VERSION || 'v8';
+  const endpoint = path.startsWith('/crm/') ? path : ('/crm/' + version + (path.startsWith('/') ? '' : '/') + path);
+  return callZohoApi(endpoint, method, body);
+}
+
+// ========== COQL (Zoho) ==========
+// Uniwersalny helper do zapytań COQL, żebyśmy mogli łatwo dodawać kolejne wyszukiwania.
+
+function zohoEscapeCoqlString(value) {
+  const str = (value === null || value === undefined) ? '' : String(value);
+  // COQL używa apostrofów do stringów → escape ' oraz backslash
+  return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+/**
+ * Buduje select_query COQL.
+ * @param {Object} params
+ * @param {string} params.module np. 'Accounts'
+ * @param {string[]} params.fields np. ['id','Account_Name']
+ * @param {string} params.where np. "(NIP = '123')"
+ * @param {number} [params.limit] default 5
+ * @param {string} [params.orderBy] np. 'Modified_Time'
+ * @param {'ASC'|'DESC'} [params.order] default 'DESC'
+ */
+function buildZohoCoqlQuery(params) {
+  if (!params || !params.module) throw new Error('buildZohoCoqlQuery: module jest wymagany');
+  if (!params.where) throw new Error('buildZohoCoqlQuery: where jest wymagany');
+  const fields = (params.fields && params.fields.length) ? params.fields : ['id'];
+  const limit = typeof params.limit === 'number' ? params.limit : 5;
+  const order = params.order || 'DESC';
+  const orderBy = params.orderBy ? (' ORDER BY ' + params.orderBy + ' ' + order) : '';
+  return 'SELECT ' + fields.join(', ') + ' FROM ' + params.module + ' WHERE ' + params.where + orderBy + ' LIMIT ' + limit;
+}
+
+/**
+ * Wykonuje COQL i zwraca tablicę rekordów (response.data).
+ */
+function zohoCoql(params) {
+  const query = typeof params === 'string' ? params : buildZohoCoqlQuery(params);
+  // v8: {api-domain}/crm/{version}/coql (z dokumentacji v8)
+  try {
+    const responseV8 = callZohoApiV8('/coql', 'post', { select_query: query });
+    return (responseV8 && responseV8.data) ? responseV8.data : [];
+  } catch (e) {
+    // Fallback do v2, jeśli w danym koncie/regionie COQL v8 okaże się niedostępne
+    Logger.log('[Zoho][COQL] v8 failed, fallback to v2: ' + e);
+    const responseV2 = callZohoApi('/crm/v2/coql', 'post', { select_query: query });
+    return (responseV2 && responseV2.data) ? responseV2.data : [];
+  }
+}
+
 // ========== ETAP C: Matching firm i kontaktów w Zoho CRM ==========
 
 function normalizeNip(nip) {
@@ -167,13 +224,159 @@ function pickZohoRecord(response) {
   return null;
 }
 
+// ===== Kontakty: bezpieczny wybór rekordu / niejednoznaczność =====
+
+function normalizeNameValue(value) {
+  return (value || '')
+    .toString()
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toUpperCase();
+}
+
+function getCandidateNameParts(candidate) {
+  const fn = (candidate && (candidate.first_name || candidate.firstName) || '').toString().trim();
+  const ln = (candidate && (candidate.last_name || candidate.lastName) || '').toString().trim();
+  return { firstName: fn, lastName: ln, hasFirst: !!fn, hasLast: !!ln, hasFull: !!fn && !!ln, hasAny: !!fn || !!ln };
+}
+
+function mapPossibleContactMatches(records) {
+  const out = [];
+  const seen = new Set();
+  (records || []).forEach(function(r) {
+    if (!r || !r.id) return;
+    if (seen.has(r.id)) return;
+    seen.add(r.id);
+    out.push({
+      crmId: r.id,
+      Full_Name: r.Full_Name || r.full_name || null,
+      Email: r.Email || r.email || null,
+      Phone: r.Phone || r.phone || null,
+      Mobile: r.Mobile || r.mobile || null,
+      Account_Name: r.Account_Name || r.account_name || null
+    });
+  });
+  return out;
+}
+
+function pickBestContactRecord(records, candidate) {
+  const list = Array.isArray(records) ? records : [];
+  if (!list.length) return { record: null, ambiguous: false, possible: [] };
+  if (list.length === 1) return { record: list[0], ambiguous: false, possible: mapPossibleContactMatches(list) };
+
+  const candEmail = (resolveCandidateEmail(candidate) || '').toString().trim().toLowerCase();
+  const candPhone = normalizePhone(resolveCandidatePhone(candidate));
+  const name = getCandidateNameParts(candidate);
+  const fnUp = normalizeNameValue(name.firstName);
+  const lnUp = normalizeNameValue(name.lastName);
+
+  let best = null;
+  let bestScore = -1;
+  let secondScore = -1;
+
+  list.forEach(function(r) {
+    let score = 0;
+    const rEmail = (r.Email || r.email || '').toString().trim().toLowerCase();
+    const rPhone = normalizePhone(r.Phone || r.phone || '');
+    const rMobile = normalizePhone(r.Mobile || r.mobile || '');
+    const rFnUp = normalizeNameValue(r.First_Name || r.first_name || '');
+    const rLnUp = normalizeNameValue(r.Last_Name || r.last_name || '');
+
+    if (candEmail && rEmail && candEmail === rEmail) score += 100;
+    if (candPhone && (candPhone === rPhone || candPhone === rMobile)) score += 60;
+    if (fnUp && rFnUp && fnUp === rFnUp) score += 25;
+    if (lnUp && rLnUp && lnUp === rLnUp) score += 25;
+    if (fnUp && lnUp && rFnUp && rLnUp && fnUp === rFnUp && lnUp === rLnUp) score += 20;
+
+    if (score > bestScore) {
+      secondScore = bestScore;
+      bestScore = score;
+      best = r;
+    } else if (score > secondScore) {
+      secondScore = score;
+    }
+  });
+
+  // jeśli różnica między najlepszym a drugim jest mała, traktuj jako niejednoznaczne
+  const ambiguous = bestScore >= 0 && secondScore >= 0 && (bestScore - secondScore) < 30;
+  return { record: ambiguous ? null : best, ambiguous: ambiguous, possible: mapPossibleContactMatches(list) };
+}
+
+function isDepartmentLikeEmail(email) {
+  const value = (email || '').toString().trim().toLowerCase();
+  if (!value || value.indexOf('@') === -1) return false;
+  const local = value.split('@')[0] || '';
+  const localNorm = local.replace(/[._-]/g, '');
+  const deny = [
+    'info', 'kontakt', 'contact', 'office', 'biuro', 'sekretariat', 'recepcja', 'rejestracja',
+    'sales', 'sprzedaz', 'marketing', 'pr', 'media', 'hr', 'kadry', 'rekrutacja', 'support', 'pomoc',
+    'admin', 'administracja', 'bok', 'hello', 'team'
+  ];
+  // Exact match OR common variations like: biuro.krakow@, sekretariat-1@, kontakt_pl@ (po normalizacji znaków)
+  for (var i = 0; i < deny.length; i++) {
+    var token = deny[i];
+    if (!token) continue;
+    if (localNorm === token) return true;
+    // ostrożnie: tylko prefix/suffix, żeby nie łapać przypadkowych substringów
+    if (localNorm.indexOf(token) === 0) return true;
+    if (localNorm.lastIndexOf(token) === (localNorm.length - token.length)) return true;
+  }
+  return false;
+}
+
+function pickBestAccountRecord(records, candidate, domainHint) {
+  if (!records || !records.length) return null;
+  if (records.length === 1) return records[0];
+
+  const candName = normalizeCompanyName(candidate && (candidate.company_name || candidate.name || '') || '');
+  const candNip = normalizeNip(candidate && candidate.nip);
+  const candDomain = normalizeDomain(domainHint || getCandidateDomain(candidate));
+
+  let best = null;
+  let bestScore = -1;
+  let secondScore = -1;
+
+  records.forEach(function(r) {
+    let score = 0;
+    const rNip = normalizeNip(r.NIP || r.nip);
+    const rName = normalizeCompanyName(r.Account_Name || r.account_name || r.Company_Name || '');
+    const rFriendly = normalizeCompanyName(r.Nazwa_zwyczajowa || r.nazwa_zwyczajowa || '');
+    const rWebsite = normalizeDomain(r.Website || r.website || '');
+
+    if (candNip && rNip && candNip === rNip) score += 100;
+    if (candDomain && rWebsite && rWebsite.indexOf(candDomain) !== -1) score += 30;
+    if (candName && rName && candName === rName) score += 20;
+    if (candName && rFriendly && (rFriendly.indexOf(candName) !== -1 || candName.indexOf(rFriendly) !== -1)) score += 10;
+
+    if (score > bestScore) {
+      secondScore = bestScore;
+      bestScore = score;
+      best = r;
+    } else if (score > secondScore) {
+      secondScore = score;
+    }
+  });
+
+  // Jeśli wynik nie jest wystarczająco pewny lub jest remis → nie wybieraj losowo pierwszego
+  if (bestScore < 20 || bestScore === secondScore) {
+    return null;
+  }
+  return best;
+}
+
 function searchAccountsByNip(nip, candidate) {
   const normalized = normalizeNip(nip);
   if (!normalized) return null;
   try {
-    const criteria = encodeURIComponent('(NIP:equals:' + normalized + ')');
-    const response = callZohoApi('/crm/v2/Accounts/search?criteria=' + criteria, 'get');
-    return buildAccountMatch(pickZohoRecord(response), 'nip', candidate);
+    const where = "(NIP = '" + zohoEscapeCoqlString(normalized) + "')";
+    const records = zohoCoql({
+      module: 'Accounts',
+      fields: ['id', 'Account_Name', 'Website', 'NIP', 'Nazwa_zwyczajowa', 'Phone', 'Email', 'Billing_Street', 'Billing_City', 'Billing_Code', 'Billing_State'],
+      where: where,
+      limit: 5
+    });
+    const record = pickBestAccountRecord(records, candidate, null) || (records.length === 1 ? records[0] : null);
+    return buildAccountMatch(record, 'nip', candidate);
   } catch (error) {
     Logger.log('[Zoho] searchAccountsByNip error: ' + error);
     return null;
@@ -181,19 +384,45 @@ function searchAccountsByNip(nip, candidate) {
 }
 
 function searchAccountsByName(name, candidate) {
-  const normalized = normalizeCompanyName(name);
-  if (!normalized) return null;
+  const raw = (name || '').toString().trim();
+  const normalized = normalizeCompanyName(raw);
+  if (!raw && !normalized) return null;
   try {
-    const criteria = encodeURIComponent('(Account_Name:equals:' + normalized + ')');
-    const response = callZohoApi('/crm/v2/Accounts/search?criteria=' + criteria, 'get');
-    let record = pickZohoRecord(response);
-    if (!record && normalized.length >= 3) {
-      // fallback: starts_with na nazwie zwyczajowej
-      const friendlyCriteria = encodeURIComponent('(Nazwa_zwyczajowa:starts_with:' + normalized + ')');
-      const friendlyResponse = callZohoApi('/crm/v2/Accounts/search?criteria=' + friendlyCriteria, 'get');
-      record = pickZohoRecord(friendlyResponse);
+    const fields = ['id', 'Account_Name', 'Website', 'NIP', 'Nazwa_zwyczajowa', 'Phone', 'Email', 'Billing_Street', 'Billing_City', 'Billing_Code', 'Billing_State'];
+    const domainHint = getCandidateDomain(candidate);
+
+    // 1) dokładna nazwa (raw)
+    if (raw) {
+      const whereExact = "(Account_Name = '" + zohoEscapeCoqlString(raw) + "')";
+      const recordsExact = zohoCoql({ module: 'Accounts', fields: fields, where: whereExact, limit: 5 });
+      const bestExact = pickBestAccountRecord(recordsExact, candidate, domainHint);
+      if (bestExact) return buildAccountMatch(bestExact, 'name', candidate);
+      if (recordsExact.length === 1) return buildAccountMatch(recordsExact[0], 'name', candidate);
     }
-    return buildAccountMatch(record, 'name', candidate);
+
+    // 2) fallback: starts_with na nazwie zwyczajowej (bardziej restrykcyjne niż contains)
+    if (normalized && normalized.length >= 3) {
+      const whereFriendly = "(Nazwa_zwyczajowa like '" + zohoEscapeCoqlString(normalized) + "%')";
+      const recordsFriendly = zohoCoql({ module: 'Accounts', fields: fields, where: whereFriendly, limit: 5 });
+      const bestFriendly = pickBestAccountRecord(recordsFriendly, candidate, domainHint);
+      if (bestFriendly) return buildAccountMatch(bestFriendly, 'name', candidate);
+      if (recordsFriendly.length === 1) return buildAccountMatch(recordsFriendly[0], 'name', candidate);
+    }
+
+    // 3) fallback: starts_with po Account_Name (bezpieczniejsze niż contains)
+    if (normalized && normalized.length >= 4) {
+      const wherePrefix = "(Account_Name like '" + zohoEscapeCoqlString(normalized) + "%')";
+      const recordsPrefix = zohoCoql({ module: 'Accounts', fields: fields, where: wherePrefix, limit: 5 });
+      const bestPrefix = pickBestAccountRecord(recordsPrefix, candidate, domainHint);
+      if (bestPrefix) return buildAccountMatch(bestPrefix, 'name', candidate);
+      if (recordsPrefix.length === 1) return buildAccountMatch(recordsPrefix[0], 'name', candidate);
+    }
+
+    // Niejednoznaczne / brak
+    if (raw || normalized) {
+      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Account name search ambiguous or empty results: ' + (raw || normalized) });
+    }
+    return null;
   } catch (error) {
     Logger.log('[Zoho] searchAccountsByName error: ' + error);
     return null;
@@ -204,9 +433,18 @@ function searchAccountsByDomain(domain, candidate) {
   const normalized = normalizeDomain(domain);
   if (!normalized) return null;
   try {
-    const criteria = encodeURIComponent('(Website:contains:' + normalized + ')');
-    const response = callZohoApi('/crm/v2/Accounts/search?criteria=' + criteria, 'get');
-    return buildAccountMatch(pickZohoRecord(response), 'domain', candidate);
+    const where = "(Website like '%" + zohoEscapeCoqlString(normalized) + "%')";
+    const records = zohoCoql({
+      module: 'Accounts',
+      fields: ['id', 'Account_Name', 'Website', 'NIP', 'Nazwa_zwyczajowa', 'Phone', 'Email', 'Billing_Street', 'Billing_City', 'Billing_Code', 'Billing_State'],
+      where: where,
+      limit: 5
+    });
+    const record = pickBestAccountRecord(records, candidate, normalized) || (records.length === 1 ? records[0] : null);
+    if (!record && records.length > 1) {
+      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Account domain search ambiguous: domain=' + normalized + ', hits=' + records.length });
+    }
+    return buildAccountMatch(record, 'domain', candidate);
   } catch (error) {
     Logger.log('[Zoho] searchAccountsByDomain error: ' + error);
     return null;
@@ -217,12 +455,24 @@ function searchContactsByEmail(email, candidate) {
   const normalized = (email || '').toString().trim().toLowerCase();
   if (!normalized) return null;
   try {
-    const criteria = encodeURIComponent('(Email:equals:' + normalized + ')');
-    const response = callZohoApi('/crm/v2/Contacts/search?criteria=' + criteria, 'get');
-    return buildContactMatch(pickZohoRecord(response), 'email', candidate);
+    // v8 Search Records: GET /Contacts/search?email=...
+    const response = callZohoApiV8('/Contacts/search?email=' + encodeURIComponent(normalized), 'get');
+    const picked = pickBestContactRecord(response && response.data, candidate);
+    if (picked.ambiguous) return null;
+    return buildContactMatch(picked.record, 'email', candidate);
   } catch (error) {
-    Logger.log('[Zoho] searchContactsByEmail error: ' + error);
-    return null;
+    // fallback v2
+    try {
+      Logger.log('[Zoho] searchContactsByEmail v8 failed, fallback v2: ' + error);
+      const criteria = encodeURIComponent('(Email:equals:' + normalized + ')');
+      const responseV2 = callZohoApi('/crm/v2/Contacts/search?criteria=' + criteria, 'get');
+      const picked = pickBestContactRecord(responseV2 && responseV2.data, candidate);
+      if (picked.ambiguous) return null;
+      return buildContactMatch(picked.record, 'email', candidate);
+    } catch (e2) {
+      Logger.log('[Zoho] searchContactsByEmail error: ' + e2);
+      return null;
+    }
   }
 }
 
@@ -238,7 +488,9 @@ function searchContactByNameAndEmail(firstName, lastName, email, candidate) {
   const criteria = encodeURIComponent('(' + parts.join(' and ') + ')');
   try {
     const response = callZohoApi('/crm/v2/Contacts/search?criteria=' + criteria, 'get');
-    return buildContactMatch(pickZohoRecord(response), 'name+email', candidate);
+    const picked = pickBestContactRecord(response && response.data, candidate);
+    if (picked.ambiguous) return null;
+    return buildContactMatch(picked.record, 'name+email', candidate);
   } catch (error) {
     Logger.log('[Zoho] searchContactByNameAndEmail error: ' + error);
     return null;
@@ -249,12 +501,26 @@ function searchContactsByPhone(phone, candidate) {
   const normalized = normalizePhone(phone);
   if (!normalized) return null;
   try {
-    const criteria = encodeURIComponent('((Phone:contains:' + normalized + ') or (Mobile:contains:' + normalized + '))');
-    const response = callZohoApi('/crm/v2/Contacts/search?criteria=' + criteria, 'get');
-    return buildContactMatch(pickZohoRecord(response), 'phone', candidate);
+    // v8 Search Records: GET /Contacts/search?phone=...
+    // Uwaga: v8 criteria nie wspiera operatora "contains" dla pól Phone/Email (zamiast tego jest equals/starts_with),
+    // więc używamy dedykowanego parametru phone.
+    const response = callZohoApiV8('/Contacts/search?phone=' + encodeURIComponent(normalized), 'get');
+    const picked = pickBestContactRecord(response && response.data, candidate);
+    if (picked.ambiguous) return null;
+    return buildContactMatch(picked.record, 'phone', candidate);
   } catch (error) {
-    Logger.log('[Zoho] searchContactsByPhone error: ' + error);
-    return null;
+    // fallback v2 (stara logika criteria/contains)
+    try {
+      Logger.log('[Zoho] searchContactsByPhone v8 failed, fallback v2: ' + error);
+      const criteria = encodeURIComponent('((Phone:contains:' + normalized + ') or (Mobile:contains:' + normalized + '))');
+      const responseV2 = callZohoApi('/crm/v2/Contacts/search?criteria=' + criteria, 'get');
+      const picked = pickBestContactRecord(responseV2 && responseV2.data, candidate);
+      if (picked.ambiguous) return null;
+      return buildContactMatch(picked.record, 'phone', candidate);
+    } catch (e2) {
+      Logger.log('[Zoho] searchContactsByPhone error: ' + e2);
+      return null;
+    }
   }
 }
 
@@ -440,6 +706,14 @@ function shouldIgnoreContact(contact, rules) {
 
   const email = resolveCandidateEmail(contact);
   const domain = getDomainFromEmail(email) || getCandidateDomain(contact);
+
+  // Gating: nie traktuj skrzynek ogólnych (sekretariat/info/kontakt/biuro...) jako "osoby"
+  // Jeśli brak imienia/nazwiska, pomiń taki kontakt już na etapie filtrów (żeby nie trafiał do UI/matchingu).
+  const nameParts = getCandidateNameParts(contact);
+  if (email && isDepartmentLikeEmail(email) && !nameParts.hasAny) {
+    return { reason: 'department_email_no_person', value: email };
+  }
+
   if (domain && rules.domainSet.has(domain)) {
     return { reason: 'domain', value: domain };
   }
@@ -546,8 +820,118 @@ function emptyMatch() {
     crmId: null,
     crmData: null,
     matchSource: null,
-    needsEnrichment: false
+    needsEnrichment: false,
+    possibleCrmMatches: []
   };
+}
+
+// ===== Firmy: hint search (possible_match) =====
+
+var COMPANY_KEYWORD_STOPWORDS = [
+  'SP', 'Z', 'OO', 'O.O.', 'SP.', 'SPÓŁKA', 'SPOLKA', 'S.A', 'SA', 'LTD', 'LLC',
+  'MEDICAL', 'MEDYCZNA', 'KLINIKA', 'CLINIC', 'CENTER', 'CENTRUM', 'HOSPITAL', 'SZPITAL',
+  'GROUP', 'GRUPA', 'POLSKA', 'EUROPE', 'EU'
+];
+
+function isStopword(token) {
+  if (!token) return true;
+  const up = token.toString().trim().toUpperCase();
+  if (!up) return true;
+  return COMPANY_KEYWORD_STOPWORDS.indexOf(up) !== -1;
+}
+
+function extractCompanyKeyword(candidate) {
+  if (!candidate) return '';
+  const explicit =
+    candidate.company_keyword || // docelowe pole z LLM (snake_case)
+    candidate.companyKeyword ||  // kompatybilność wstecz (gdyby ktoś dodał camelCase)
+    candidate.keyword ||         // kompatybilność wstecz
+    '';
+  const rawName = (candidate.company_name || candidate.name || candidate.company_friendly_name || '').toString().trim();
+  const source = explicit ? explicit.toString().trim() : rawName;
+  if (!source) return '';
+
+  // Weź maks 2 tokeny (ale preferuj 1), usuń stopwords i krótkie tokeny
+  const tokens = source
+    .replace(/[^\p{L}\p{N}\s.-]/gu, ' ')
+    .split(/\s+/)
+    .map(t => t.trim())
+    .filter(Boolean)
+    .map(t => t.toUpperCase())
+    .filter(t => t.length >= 4)
+    .filter(t => !isStopword(t));
+
+  if (!tokens.length) return '';
+  // Zwróć 1 token (najbardziej restrykcyjnie); drugi token zostawiamy na przyszłość, jeśli zechcesz
+  return tokens[0];
+}
+
+function mapPossibleAccountMatches(records) {
+  const out = [];
+  const seen = new Set();
+  (records || []).forEach(function(r) {
+    if (!r || !r.id) return;
+    if (seen.has(r.id)) return;
+    seen.add(r.id);
+    out.push({
+      crmId: r.id,
+      Account_Name: r.Account_Name || null,
+      Website: r.Website || null,
+      NIP: r.NIP || null
+    });
+  });
+  return out;
+}
+
+function findPossibleAccountsByDomain(domain) {
+  const normalized = normalizeDomain(domain);
+  if (!normalized) return [];
+  const where = "(Website like '%" + zohoEscapeCoqlString(normalized) + "%')";
+  const records = zohoCoql({
+    module: 'Accounts',
+    fields: ['id', 'Account_Name', 'Website', 'NIP'],
+    where: where,
+    limit: 5
+  });
+  return mapPossibleAccountMatches(records);
+}
+
+function findPossibleAccountsByKeyword(keyword) {
+  const kw = (keyword || '').toString().trim().toUpperCase();
+  if (!kw || kw.length < 4 || isStopword(kw)) return [];
+  const where = "(Account_Name like '%" + zohoEscapeCoqlString(kw) + "%')";
+  const records = zohoCoql({
+    module: 'Accounts',
+    fields: ['id', 'Account_Name', 'Website', 'NIP'],
+    where: where,
+    limit: 5
+  });
+  return mapPossibleAccountMatches(records);
+}
+
+function findPossibleAccountsCombined(domain, keyword) {
+  const normalizedDomain = normalizeDomain(domain);
+  const kw = (keyword || '').toString().trim().toUpperCase();
+  const hasDomain = Boolean(normalizedDomain);
+  const hasKeyword = Boolean(kw && kw.length >= 4 && !isStopword(kw));
+  if (!hasDomain && !hasKeyword) return [];
+
+  const parts = [];
+  if (hasDomain) {
+    parts.push("(Website like '%" + zohoEscapeCoqlString(normalizedDomain) + "%')");
+  }
+  if (hasKeyword) {
+    parts.push("(Account_Name like '%" + zohoEscapeCoqlString(kw) + "%')");
+  }
+
+  const where = '(' + parts.join(' or ') + ')';
+  const records = zohoCoql({
+    module: 'Accounts',
+    fields: ['id', 'Account_Name', 'Website', 'NIP'],
+    where: where,
+    limit: 5
+  });
+  return mapPossibleAccountMatches(records);
 }
 
 function matchAccountCandidate(candidate) {
@@ -557,6 +941,8 @@ function matchAccountCandidate(candidate) {
   Logger.log('[Zoho Matching] 🔍 Account candidate: ' + candidateJson);
   saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Account candidate: ' + candidateJson });
 
+  // ZASADA SYSTEMOWA: existsInCrm dla firmy ustawiamy WYŁĄCZNIE po NIP.
+  // Domena/nazwa/keyword służą tylko jako "possible match" (hint), nigdy jako twardy match.
   var match = null;
 
   if (candidate.nip) {
@@ -567,33 +953,31 @@ function matchAccountCandidate(candidate) {
       saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by NIP: crmId=' + match.crmId });
       return match;
     }
+    // Jeśli NIP jest, ale nie ma matchu → rekord w CRM nie istnieje wg polityki, ale możemy dać hinty (wykrycie potencjalnych duplikatów).
   }
 
-  if (candidate.name || candidate.company_name) {
-    var name = candidate.name || candidate.company_name;
-    Logger.log('[Zoho Matching] Szukam po nazwie: ' + name);
-    match = searchAccountsByName(name, candidate);
-    if (match && match.existsInCrm) {
-      Logger.log('[Zoho Matching] ✅ Match by name, crmId=' + match.crmId);
-      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by name: crmId=' + match.crmId });
-      return match;
-    }
-  }
-
+  // Hint search (possible_match)
   var domain = getCandidateDomain(candidate);
-  if (domain) {
-    Logger.log('[Zoho Matching] Szukam po domenie: ' + domain);
-    match = searchAccountsByDomain(domain, candidate);
-    if (match && match.existsInCrm) {
-      Logger.log('[Zoho Matching] ✅ Match by domain, crmId=' + match.crmId);
-      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by domain: crmId=' + match.crmId });
-      return match;
-    }
+  var kw = extractCompanyKeyword(candidate);
+  Logger.log('[Zoho Matching] Hint (COQL OR): domain=' + (domain || '-') + ', keyword=' + (kw || '-'));
+  var possible = findPossibleAccountsCombined(domain, kw);
+  // de-dup (po crmId)
+  if (possible.length) {
+    const seen = new Set();
+    possible = possible.filter(function(p) {
+      if (!p || !p.crmId) return false;
+      if (seen.has(p.crmId)) return false;
+      seen.add(p.crmId);
+      return true;
+    });
+    saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Possible matches found: ' + possible.length });
   }
 
   Logger.log('[Zoho Matching] ❌ Account not found in CRM');
-  saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Account not found: ' + (candidate.company_name || candidate.name || 'unknown') });
-  return emptyMatch();
+  saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Account not found (by NIP): ' + (candidate.company_name || candidate.name || 'unknown') });
+  var out = emptyMatch();
+  out.possibleCrmMatches = possible;
+  return out;
 }
 
 function matchContactCandidate(candidate) {
@@ -605,31 +989,49 @@ function matchContactCandidate(candidate) {
 
   var match = null;
   var email = resolveCandidateEmail(candidate);
-  if (email) {
-    Logger.log('[Zoho Matching] Szukam po email: ' + email);
+  var phone = resolveCandidatePhone(candidate);
+  var name = getCandidateNameParts(candidate);
+
+  // email_is_personal w tym projekcie = "email imienny służbowy (direct) vs ogólny/działowy"
+  var emailDirectBusiness = candidate.email_is_personal === true;
+  var emailDepartmentLike = isDepartmentLikeEmail(email) || (candidate.email_is_personal === false);
+
+  // Anty-błąd: nie dopasowuj "sekretariat@" jako osoby, jeśli nie mamy żadnego imienia/nazwiska
+  if (email && emailDepartmentLike && !name.hasAny) {
+    Logger.log('[Zoho Matching] ⛔ Pomijam contact match: ogólny email bez osoby: ' + email);
+    saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Skip contact match: department-like email without person: ' + email });
+    return emptyMatch();
+  }
+
+  // 1) Email bezpośrednio służbowy (imienny): wolno szukać po emailu
+  if (email && emailDirectBusiness) {
+    Logger.log('[Zoho Matching] Szukam po email (direct business): ' + email);
     match = searchContactsByEmail(email, candidate);
     if (match && match.existsInCrm) {
-      Logger.log('[Zoho Matching] ✅ Match by email, crmId=' + match.crmId);
-      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by email: crmId=' + match.crmId });
+      Logger.log('[Zoho Matching] ✅ Match by email (direct), crmId=' + match.crmId);
+      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by email (direct): crmId=' + match.crmId });
       return match;
     }
-    // LLM zwraca first_name / last_name, ale obsługujemy też firstName / lastName
-    var firstName = candidate.first_name || candidate.firstName || '';
-    var lastName = candidate.last_name || candidate.lastName || '';
-    if (firstName || lastName) {
-      Logger.log('[Zoho Matching] Szukam po name+email: ' + firstName + ' ' + lastName + ' / ' + email);
+  }
+
+  // 2) Email ogólny/niepewny: tylko name+email (i to najlepiej pełne imię+nazwisko)
+  if (email && !emailDirectBusiness) {
+    var firstName = name.firstName || '';
+    var lastName = name.lastName || '';
+    if (name.hasFull) {
+      Logger.log('[Zoho Matching] Szukam po name+email (non-direct): ' + firstName + ' ' + lastName + ' / ' + email);
       match = searchContactByNameAndEmail(firstName, lastName, email, candidate);
       if (match && match.existsInCrm) {
-        Logger.log('[Zoho Matching] ✅ Match by name + email, crmId=' + match.crmId);
-        saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by name+email: crmId=' + match.crmId });
+        Logger.log('[Zoho Matching] ✅ Match by name+email (non-direct), crmId=' + match.crmId);
+        saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by name+email (non-direct): crmId=' + match.crmId });
         return match;
       }
     }
   }
 
-  var phone = resolveCandidatePhone(candidate);
-  if (phone) {
-    Logger.log('[Zoho Matching] Szukam po telefonie: ' + phone);
+  // 3) Telefon: szukaj tylko jeśli mamy też jakąś część imienia/nazwiska (żeby nie brać pierwszego lepszego)
+  if (phone && name.hasAny) {
+    Logger.log('[Zoho Matching] Szukam po telefonie (z imieniem/nazwiskiem): ' + phone);
     match = searchContactsByPhone(phone, candidate);
     if (match && match.existsInCrm) {
       Logger.log('[Zoho Matching] ✅ Match by phone, crmId=' + match.crmId);
@@ -1148,14 +1550,23 @@ function performZohoMatching(messageId, filteredAnalysis, metadata) {
                    ', needsEnrichment=' + match.needsEnrichment +
                    ', category=' + company.category);
       } else {
+        const possible = match && Array.isArray(match.possibleCrmMatches) ? match.possibleCrmMatches : [];
         company.existsInCrm = false;
         company.crmId = null;
         company.crmData = null;
         company.matchSource = null;
         company.needsEnrichment = false;
-        var hasBasicData = company.company_name && (company.nip || company.website || company.phone);
-        company.category = hasBasicData ? 'new_complete' : 'new_partial';
-        Logger.log('[GAS] ℹ️ Firma nie znaleziona w CRM (nowy rekord), category=' + company.category);
+        company.possibleCrmMatches = possible;
+
+        const hasNip = Boolean(company.nip);
+        if (possible.length) {
+          company.category = 'possible_match';
+          Logger.log('[GAS] 🟣 Firma possible_match (hinty=' + possible.length + ')');
+        } else {
+          // wg polityki: bez NIP firma nie jest "complete"
+          company.category = hasNip ? 'new_complete' : 'new_partial';
+          Logger.log('[GAS] ℹ️ Firma nie znaleziona w CRM (by NIP), category=' + company.category);
+        }
       }
     } catch (matchError) {
       Logger.log('[GAS] ⚠️ Błąd matchingu firmy: ' + matchError.toString());

@@ -155,13 +155,15 @@ const STAN_TITLES = {
 
 const CATEGORY_ORDER = {
   existing_enrichable: 0,
-  new_complete: 1,
-  new_partial: 2,
-  existing_complete: 3
+  possible_match: 1,
+  new_complete: 2,
+  new_partial: 3,
+  existing_complete: 4
 };
 
 const CATEGORY_BADGES = {
   existing_enrichable: { className: 'badge-existing_enrichable', label: 'existing enrichable' },
+  possible_match: { className: 'badge-possible_match', label: 'possible match' },
   new_complete: { className: 'badge-new_complete', label: 'new complete' },
   new_partial: { className: 'badge-new_partial', label: 'new partial' },
   existing_complete: { className: 'badge-existing_complete', label: 'existing complete' }
@@ -473,6 +475,9 @@ function determineAccountCategory(account) {
     }
     return 'existing_complete';
   }
+  if (Array.isArray(account.possibleCrmMatches) && account.possibleCrmMatches.length > 0) {
+    return 'possible_match';
+  }
   const completeness = typeof account.completenessScore === 'number'
     ? account.completenessScore
     : computeAccountCompleteness(account);
@@ -546,6 +551,9 @@ function normalizeAccountData(company = {}, index = 0) {
     emails: emailCandidates,
     websites: websiteCandidates,
     crmId: company.crmId || company.crm_id || '',
+    possibleCrmMatches: Array.isArray(company.possibleCrmMatches)
+      ? company.possibleCrmMatches
+      : (Array.isArray(company.possible_matches) ? company.possible_matches : (Array.isArray(company.possibleMatches) ? company.possibleMatches : [])),
     raw: company
   };
 
@@ -1348,7 +1356,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // ETAP 2*: Auto-fetch (pełna wiadomość)
   if (message.type === 'auto-mail-data') {
-    console.log('[Sidepanel] Otrzymano auto-fetch FULL data:', message.data);
+    // Nie loguj pełnej wiadomości (plainBody/htmlBody potrafią być ogromne)
+    console.log('[Sidepanel] Otrzymano auto-fetch FULL data:', {
+      success: Boolean(message?.data?.success),
+      messageId: message?.data?.messageId || '-',
+      threadId: message?.data?.threadId || '-',
+      subject: message?.data?.subject || '-',
+      plainChars: message?.data?.plainBody ? message.data.plainBody.length : 0,
+      htmlChars: message?.data?.htmlBody ? message.data.htmlBody.length : 0,
+      attachments: Array.isArray(message?.data?.attachments) ? message.data.attachments.length : 0
+    });
     threadState.messageMetadataLoaded = true;
     threadState.currentView = 'auto';
     displayFetchedData(message.data, 'message');
@@ -1377,7 +1394,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // ETAP 2*: Manual thread fetch (pełny wątek) - jedyny manual fetch
   if (message.type === 'full-thread-ready') {
-    console.log('[Sidepanel] Otrzymano full-thread-ready:', message.data);
+    // Nie loguj pełnego wątku (dużo danych); tylko podsumowanie
+    console.log('[Sidepanel] Otrzymano full-thread-ready:', {
+      success: Boolean(message?.data?.success),
+      threadId: message?.data?.threadId || '-',
+      messageCount: message?.data?.messageCount || 0
+    });
     threadState.threadFullLoaded = true;
     threadState.currentView = 'thread';
     

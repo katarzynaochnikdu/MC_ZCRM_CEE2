@@ -137,7 +137,12 @@ async function callGAS(action, params) {
     const data = JSON.parse(text);
     const dataSize = new Blob([text]).size;
     
-    console.log(`[Background] Odpowiedź z GAS (${action}): ${fetchTime.toFixed(0)}ms, ${dataSize} bytes`, data);
+    // Nie loguj całej odpowiedzi (potrafi zawierać pełne treści maili / duże obiekty)
+    console.log(`[Background] Odpowiedź z GAS (${action}): ${fetchTime.toFixed(0)}ms, ${dataSize} bytes`, {
+      success: Boolean(data?.success),
+      messageId: params?.messageId || data?.messageId || '-',
+      threadId: params?.threadId || data?.threadId || '-',
+    });
     if (backgroundLogger) {
       backgroundLogger.info(`📊 Performance GAS (${action})`, {
         fetchTime: `${fetchTime.toFixed(0)}ms`,
@@ -332,7 +337,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       messageId: msgId
     }).then(result => {
       const totalTime = performance.now() - manualThreadStart;
-      console.log('[Background] ⭐ Odpowiedź z GAS (fetch-thread-full):', result);
+      // Nie loguj pełnej odpowiedzi (wątek może być duży) – tylko podsumowanie
+      console.log('[Background] ⭐ Odpowiedź z GAS (fetch-thread-full):', {
+        success: Boolean(result?.success),
+        threadId: result?.threadId || '-',
+        apiThreadId: result?.apiThreadId || '-',
+        messageCount: result?.messageCount || 0
+      });
       
       if (result.success) {
         console.log(`[Background] ✅ MANUAL-THREAD-FETCH COMPLETE: ${totalTime.toFixed(0)}ms, ${result.messageCount || 0} messages`);

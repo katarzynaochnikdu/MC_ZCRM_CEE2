@@ -29,26 +29,43 @@ class Logger {
 
     const self = this;
 
+    // Ogranicz rozmiar logów wysyłanych do Drive (żeby nie wysyłać całych maili/dużych obiektów)
+    function safeStringifyForLog(value, maxLen = 800) {
+      try {
+        if (typeof value === 'string') {
+          const str = value;
+          return str.length > maxLen ? str.slice(0, maxLen) + '…[truncated]' : str;
+        }
+        if (value && typeof value === 'object') {
+          const json = JSON.stringify(value);
+          return json.length > maxLen ? json.slice(0, maxLen) + '…[truncated]' : json;
+        }
+        return String(value);
+      } catch (e) {
+        return '[unstringifiable]';
+      }
+    }
+
     console.log = function(...args) {
       originalLog.apply(console, args);
       // Unikaj pętli nieskończonej (nie loguj logów loggera)
       if (args[0] && typeof args[0] === 'string' && args[0].startsWith('[Logger]')) return;
-      self.log(LOG_LEVELS.INFO, args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' '));
+      self.log(LOG_LEVELS.INFO, args.map(a => safeStringifyForLog(a)).join(' '));
     };
 
     console.warn = function(...args) {
       originalWarn.apply(console, args);
-      self.log(LOG_LEVELS.WARN, args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' '));
+      self.log(LOG_LEVELS.WARN, args.map(a => safeStringifyForLog(a)).join(' '));
     };
 
     console.error = function(...args) {
       originalError.apply(console, args);
-      self.log(LOG_LEVELS.ERROR, args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' '));
+      self.log(LOG_LEVELS.ERROR, args.map(a => safeStringifyForLog(a)).join(' '));
     };
     
     console.debug = function(...args) {
       originalDebug.apply(console, args);
-      self.log(LOG_LEVELS.DEBUG, args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' '));
+      self.log(LOG_LEVELS.DEBUG, args.map(a => safeStringifyForLog(a)).join(' '));
     };
     
     this.info('Przechwytywanie konsoli włączone');
