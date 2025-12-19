@@ -1,0 +1,175 @@
+PROMPT DLA GEMINI 2.5 PRO - EKSTRAKCJA DANYCH B2B Z EMAIL
+=========================================================
+
+Przetwórz surowy e-mail (HTML, tekst, MIME, forwarded, quoted) i zwróć wyłącznie jeden obiekt JSON w określonym formacie.
+Bez markdown, bez komentarzy, bez wyjaśnień, bez tekstu przed ani po JSON.
+
+1. CEL ZADANIA
+==============
+
+Wyodrębnij z treści e-maila wszystkie dane B2B:
+- organizacje (firmy, instytucje, urzędy, szpitale, uczelnie),
+- osoby (kontakty biznesowe) powiązane z tym e-mailem.
+
+IGNORUJ:
+- stopki prywatne,
+- reklamy,
+- social media,
+- automatyczne podpisy,
+- dane osobowe niezwiązane z biznesem.
+
+2. FORMAT ODPOWIEDZI
+====================
+
+ZWRÓĆ TYLKO TEN JSON (bez markdown, bez dodatkowego tekstu):
+
+{
+  "companies": [...],
+  "contacts": [...]
+}
+
+3. DEFINICJA companies[]
+=========================
+
+Każdy obiekt ma format:
+
+{
+  "company_name": "...",
+  "company_friendly_name": "...",
+  "website": "...",
+  "phone": "...",
+  "email": "...",
+  "nip": "..."
+}
+
+ZASADY DLA FIRM:
+- company_name = pełna oficjalna nazwa organizacji
+- company_friendly_name = nazwa marki/produktu lub wersja potoczna
+- website = główna domena firmowa (np. „firma.pl"), jeśli brak → null
+- phone = jeden główny numer firmowy, NIE osobisty; jeśli brak → null
+- email = jeden główny adres firmowy typu info@/office@/contact@; jeśli brak → null
+- nip = dane rejestrowe firmy (NIP/VAT/Tax ID), jeśli występują
+
+WAŻNE:
+- Nie wstawiaj prywatnych maili/telefonów jako dane firmy
+- Nie twórz firmy, jeśli nie ma wystarczających danych (minimum: nazwa LUB domena)
+
+4. DEFINICJA contacts[]
+=======================
+
+Każdy obiekt:
+
+{
+  "first_name": "...",
+  "last_name": "...",
+  "role": "...",
+  "phone": "...",
+  "mobile": "...",
+  "email": "...",
+  "company_name": "...",
+  "salutation": "Pan" / "Pani" / null
+}
+
+ZASADY DLA KONTAKTÓW:
+- first_name i last_name: rozpoznaj ostrożnie z podpisów i treści
+- role: stanowisko lub funkcja
+- phone: jeden numer służbowy (NIE komórkowy)
+- mobile: jeden numer komórkowy
+- email: jeden najlepszy zawodowy adres osoby
+- company_name: powiąż z firmą tylko jeśli to oczywiste
+- salutation: "Pan"/"Pani" jeśli pewne; inaczej null
+
+WAŻNE:
+- Jedna osoba = jeden obiekt
+- Nie duplikuj kontaktów
+
+5. REGUŁY OGÓLNE
+=================
+
+1. Nie zgaduj danych — jeśli brak informacji → null
+2. Usuń stopki, disclaimery, social media, slogany, pouczenia prawne
+3. NIE zwracaj niczego poza czystym JSON-em
+4. Jeśli nie ma żadnych firm/kontaktów, zwróć puste tablice: {"companies": [], "contacts": []}
+5. Zachowaj DOKŁADNIE tę strukturę JSON
+
+6. PRZYKŁADY
+============
+
+PRZYKŁAD 1 - Email z firmą i kontaktem:
+=======================================
+INPUT:
+"""
+Dzień dobry,
+
+Nazywam się Jan Kowalski i jestem Dyrektorem Sprzedaży w Example Medical Sp. z o.o.
+Chciałbym omówić współpracę.
+
+Z poważaniem,
+Jan Kowalski
+Dyrektor ds. Sprzedaży
+Example Medical Sp. z o.o.
+Tel: +48 22 123 45 68
+Mob: +48 600 123 456
+Email: j.kowalski@exmed.pl
+www.exmed.pl
+NIP: 1234567890
+"""
+
+OUTPUT:
+{
+  "companies": [
+    {
+      "company_name": "Example Medical Sp. z o.o.",
+      "company_friendly_name": "ExMed",
+      "website": "exmed.pl",
+      "phone": "+48 22 123 45 68",
+      "email": "kontakt@exmed.pl",
+      "nip": "1234567890"
+    }
+  ],
+  "contacts": [
+    {
+      "first_name": "Jan",
+      "last_name": "Kowalski",
+      "role": "Dyrektor ds. Sprzedaży",
+      "phone": "+48 22 123 45 68",
+      "mobile": "+48 600 123 456",
+      "email": "j.kowalski@exmed.pl",
+      "company_name": "Example Medical Sp. z o.o.",
+      "salutation": "Pan"
+    }
+  ]
+}
+
+PRZYKŁAD 2 - Email bez danych biznesowych:
+==========================================
+INPUT:
+"""
+Hej!
+
+Spotkamy się jutro o 15:00?
+
+Pozdrawiam,
+Kasia
+"""
+
+OUTPUT:
+{
+  "companies": [],
+  "contacts": []
+}
+
+7. FORMAT KOŃCOWY
+=================
+
+Zwróć DOKŁADNIE ten JSON (bez ``` markdown, bez dodatkowego tekstu):
+
+{
+  "companies": [...],
+  "contacts": [...]
+}
+
+=========================================================
+KONIEC PROMPTU
+=========================================================
+

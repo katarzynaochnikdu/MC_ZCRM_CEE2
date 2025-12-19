@@ -35,6 +35,11 @@ let messageCache = {};  // { messageId: { threadId, processed, hasAnalysis, last
 // ETAP 2*: Funkcje zarządzania cache
 async function loadCacheFromStorage() {
   try {
+    // Bezpieczne sprawdzenie dostępności API storage (np. po invalidacji kontekstu extension)
+    if (!chrome || !chrome.storage || !chrome.storage.local) {
+      console.warn('[Background] chrome.storage.local niedostępne - pomijam ładowanie cache');
+      return;
+    }
     const result = await chrome.storage.local.get(['threadCache', 'messageCache']);
     threadCache = result.threadCache || {};
     messageCache = result.messageCache || {};
@@ -55,6 +60,10 @@ async function loadCacheFromStorage() {
 
 async function saveCacheToStorage() {
   try {
+    if (!chrome || !chrome.storage || !chrome.storage.local) {
+      console.warn('[Background] chrome.storage.local niedostępne - pomijam zapisywanie cache');
+      return;
+    }
     await chrome.storage.local.set({
       threadCache: threadCache,
       messageCache: messageCache
@@ -74,11 +83,15 @@ async function saveCacheToStorage() {
 }
 
 function updateMessageCache(messageId, threadId, processed = true) {
+  const existing = messageCache[messageId] || {};
   messageCache[messageId] = {
     threadId: threadId,
     processed: processed,
-    hasAnalysis: false,
-    lastFetchedAt: Date.now()
+    hasAnalysis: existing.hasAnalysis || false,
+    lastFetchedAt: Date.now(),
+    // ETAP 4: Analiza LLM
+    analysisData: existing.analysisData || null,
+    analyzedAt: existing.analyzedAt || null
   };
 }
 
@@ -364,6 +377,128 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     
     sendResponse({ success: true });
+  }
+
+  // ETAP 4: Analyze-message (LLM)
+  if (message.type === 'analyze-message') {
+    const msgId = message.messageId;
+    const tId = message.threadId;
+    
+    console.log('[Background] 🤖 Analyze-message START:', msgId);
+    
+    // ✅ POPRAWKA: Sprawdź najpierw czy mamy wynik w cache
+    const cachedEntry = messageCache[msgId];
+    if (cachedEntry && cachedEntry.hasAnalysis && cachedEntry.analysisData) {
+      console.log('[Background] 💾 Analyze-message: zwracam z cache (messageCache)');
+      
+      // Wyślij z cache
+      sendResponse({ 
+        success: true, 
+        fromCache: true,
+        analysis: cachedEntry.analysisData 
+      });
+      
+      // Wyślij też event do sidepanel
+      chrome.runtime.sendMessage({
+        type: 'analysis-ready',
+        messageId: msgId,
+        data: cachedEntry.analysisData,
+        fromCache: true
+      }).catch(() => {});
+      
+      return true;
+    }
+    
+    const analyzeStart = performance.now();
+    callGAS('analyze-message', {
+      messageId: msgId,
+      threadId: tId
+    }).then(result => {
+      const analyzeTime = performance.now() - analyzeStart;
+      
+      if (result.success) {
+        const isCached = result.metadata?.cached || false;
+        console.log(`[Background] ✅ Analyze-message OK: ${analyzeTime.toFixed(0)}ms` + 
+                    (isCached ? ' (z Firestore cache)' : ' (nowa analiza)'));
+        
+        // Aktualizuj messageCache
+        if (messageCache[msgId]) {
+          messageCache[msgId].hasAnalysis = true;
+          messageCache[msgId].analysisData = result.analysis || null;
+          messageCache[msgId].analyzedAt = Date.now();
+        } else {
+          // Jeśli z jakiegoś powodu nie ma wpisu, utwórz
+          messageCache[msgId] = {
+            threadId: tId,
+            processed: true,
+            hasAnalysis: true,
+            lastFetchedAt: null,
+            analysisData: result.analysis || null,
+            analyzedAt: Date.now()
+          };
+        }
+        
+        // Zapisz cache
+        saveCacheToStorage();
+        
+        if (backgroundLogger) {
+          backgroundLogger.info('🤖 LLM Analysis Complete', {
+            analyzeTime: `${analyzeTime.toFixed(0)}ms`,
+            messageId: msgId,
+            threadId: tId,
+            companiesCount: result.analysis?.companies?.length || 0,
+            contactsCount: result.analysis?.contacts?.length || 0,
+            fromFirestoreCache: isCached
+          });
+        }
+        
+        console.log('[Background] ⭐ Wysyłam analysis-ready do sidepanel');
+        chrome.runtime.sendMessage({
+          type: 'analysis-ready',
+          messageId: msgId,
+          data: result.analysis,
+          metadata: result.metadata
+        }).catch((err) => {
+          console.error('[Background] Błąd wysyłania analysis-ready:', err);
+        });
+        
+        // ✅ POPRAWKA: Wyślij odpowiedź przez sendResponse
+        sendResponse({ 
+          success: true, 
+          analysis: result.analysis,
+          metadata: result.metadata
+        });
+      } else {
+        console.error('[Background] Analyze-message failed:', result.error);
+        chrome.runtime.sendMessage({
+          type: 'analysis-error',
+          messageId: msgId,
+          error: result.error
+        }).catch(() => {});
+        
+        // ✅ POPRAWKA: Wyślij błąd przez sendResponse
+        sendResponse({ 
+          success: false, 
+          error: result.error 
+        });
+      }
+    }).catch(error => {
+      console.error('[Background] Analyze-message ERROR:', error);
+      sendResponse({ 
+        success: false, 
+        error: error.toString() 
+      });
+    });
+    
+    // ✅ WAŻNE: Zwracamy true żeby Chrome wiedział że sendResponse będzie wywołane asynchronicznie
+    return true;
+  }
+
+  // ETAP 4: Pobierz cache dla konkretnej wiadomości (do sprawdzenia hasAnalysis)
+  if (message.type === 'get-message-cache') {
+    const msgId = message.messageId;
+    const cache = messageCache[msgId] || null;
+    sendResponse({ success: true, cache: cache });
   }
   
   return true; // Asynchroniczna odpowiedź

@@ -4,6 +4,646 @@
 // NAZWA FOLDERU NA DRIVE (możesz zmienić)
 const LOG_FOLDER_NAME = 'ZCRM_CCE2_Logs';
 
+// ========== ETAP B: Zoho CRM OAuth Refresh ==========
+
+/**
+ * Odświeża token dostępu Zoho CRM przy użyciu refresh tokena.
+ * Wymaga ustawionych Script Properties:
+ * - ZOHO_GASP_CLIENT_ID
+ * - ZOHO_GASP_CLIENT_SECRET
+ * - ZOHO_GASP_REFRESH_TOKEN
+ */
+function refreshZohoToken() {
+  const props = PropertiesService.getScriptProperties();
+  const clientId = props.getProperty('ZOHO_GASP_CLIENT_ID');
+  const clientSecret = props.getProperty('ZOHO_GASP_CLIENT_SECRET');
+  const refreshToken = props.getProperty('ZOHO_GASP_REFRESH_TOKEN');
+
+  if (!clientId || !clientSecret || !refreshToken) {
+    throw new Error('Brak wymaganych Script Properties dla Zoho OAuth (clientId / clientSecret / refreshToken)');
+  }
+
+  const url =
+    'https://accounts.zoho.eu/oauth/v2/token' +
+    '?refresh_token=' + encodeURIComponent(refreshToken) +
+    '&client_id=' + encodeURIComponent(clientId) +
+    '&client_secret=' + encodeURIComponent(clientSecret) +
+    '&grant_type=refresh_token';
+
+  const response = UrlFetchApp.fetch(url, {
+    method: 'post',
+    muteHttpExceptions: true,
+  });
+
+  if (response.getResponseCode() !== 200) {
+    throw new Error('Nie udało się odświeżyć tokenu Zoho: ' + response.getContentText());
+  }
+
+  const data = JSON.parse(response.getContentText());
+  if (!data.access_token) {
+    throw new Error('Zoho nie zwróciło access_token: ' + response.getContentText());
+  }
+
+  const expiresInSec = Number(data.expires_in || 3600);
+  const expiresAt = Date.now() + (expiresInSec - 60) * 1000; // odśwież 60s przed wygaśnięciem
+
+  props.setProperty('ZOHO_GASP_ACCESS_TOKEN', data.access_token);
+  props.setProperty('ZOHO_GASP_ACCESS_TOKEN_EXP', String(expiresAt));
+
+  Logger.log('[Zoho OAuth] Access token odświeżony, wygasa o: ' + new Date(expiresAt).toISOString());
+  return data.access_token;
+}
+
+/**
+ * Zwraca ważny token dostępu do Zoho CRM, odświeżając go gdy potrzeba.
+ */
+function getZohoAccessToken() {
+  const props = PropertiesService.getScriptProperties();
+  const exp = Number(props.getProperty('ZOHO_GASP_ACCESS_TOKEN_EXP'));
+  const token = props.getProperty('ZOHO_GASP_ACCESS_TOKEN');
+
+  if (!exp || !token || Date.now() > exp) {
+    return refreshZohoToken();
+  }
+
+  return token;
+}
+
+/**
+ * Helper do wykonywania zapytań do API Zoho CRM z automatycznym dołączaniem tokenu.
+ * @param {string} endpoint np. '/crm/v2/Accounts'
+ * @param {string} method 'get'|'post'|'put'|'delete'
+ * @param {Object} [body] payload dla POST/PUT
+ */
+function callZohoApi(endpoint, method, body) {
+  if (!endpoint) {
+    throw new Error('callZohoApi: endpoint jest wymagany (np. "/crm/v2/Accounts")');
+  }
+  
+  const token = getZohoAccessToken();
+  const options = {
+    method: method || 'get',
+    muteHttpExceptions: true,
+    headers: {
+      Authorization: 'Zoho-oauthtoken ' + token,
+      'Content-Type': 'application/json',
+    },
+  };
+
+  if (body) {
+    options.payload = JSON.stringify(body);
+  }
+
+  const url = 'https://www.zohoapis.eu' + endpoint;
+  const response = UrlFetchApp.fetch(url, options);
+  const code = response.getResponseCode();
+  const text = response.getContentText();
+
+  if (code === 401) {
+    // token mógł wygasnąć mimo danych w properties → spróbuj raz jeszcze
+    refreshZohoToken();
+    return callZohoApi(endpoint, method, body);
+  }
+
+  if (code >= 200 && code < 300) {
+    return JSON.parse(text || '{}');
+  }
+
+  throw new Error('Zoho API error (' + code + '): ' + text);
+}
+
+// ========== ETAP C: Matching firm i kontaktów w Zoho CRM ==========
+
+function normalizeNip(nip) {
+  return (nip || '').toString().replace(/\D/g, '');
+}
+
+function normalizeCompanyName(name) {
+  return (name || '').toString().trim().replace(/\s+/g, ' ').toUpperCase();
+}
+
+function normalizeDomain(value) {
+  if (!value) return '';
+  let domain = value.toString().trim().toLowerCase();
+  domain = domain.replace(/^https?:\/\//, '');
+  domain = domain.replace(/^www\./, '');
+  const slashIndex = domain.indexOf('/');
+  if (slashIndex !== -1) {
+    domain = domain.substring(0, slashIndex);
+  }
+  return domain;
+}
+
+function normalizePhone(value) {
+  return (value || '').toString().replace(/\D/g, '');
+}
+
+function buildAccountMatch(record, matchSource, candidate) {
+  if (!record) return null;
+  return {
+    existsInCrm: true,
+    crmId: record.id,
+    crmData: record,
+    matchSource: matchSource,
+    needsEnrichment: candidate ? accountNeedsEnrichment(candidate, record) : false
+  };
+}
+
+function buildContactMatch(record, matchSource, candidate) {
+  if (!record) return null;
+  return {
+    existsInCrm: true,
+    crmId: record.id,
+    crmData: record,
+    matchSource: matchSource,
+    needsEnrichment: candidate ? contactNeedsEnrichment(candidate, record) : false
+  };
+}
+
+function pickZohoRecord(response) {
+  if (response && response.data && response.data.length) {
+    return response.data[0];
+  }
+  return null;
+}
+
+function searchAccountsByNip(nip, candidate) {
+  const normalized = normalizeNip(nip);
+  if (!normalized) return null;
+  try {
+    const criteria = encodeURIComponent('(NIP:equals:' + normalized + ')');
+    const response = callZohoApi('/crm/v2/Accounts/search?criteria=' + criteria, 'get');
+    return buildAccountMatch(pickZohoRecord(response), 'nip', candidate);
+  } catch (error) {
+    Logger.log('[Zoho] searchAccountsByNip error: ' + error);
+    return null;
+  }
+}
+
+function searchAccountsByName(name, candidate) {
+  const normalized = normalizeCompanyName(name);
+  if (!normalized) return null;
+  try {
+    const criteria = encodeURIComponent('(Account_Name:equals:' + normalized + ')');
+    const response = callZohoApi('/crm/v2/Accounts/search?criteria=' + criteria, 'get');
+    let record = pickZohoRecord(response);
+    if (!record && normalized.length >= 3) {
+      // fallback: starts_with na nazwie zwyczajowej
+      const friendlyCriteria = encodeURIComponent('(Nazwa_zwyczajowa:starts_with:' + normalized + ')');
+      const friendlyResponse = callZohoApi('/crm/v2/Accounts/search?criteria=' + friendlyCriteria, 'get');
+      record = pickZohoRecord(friendlyResponse);
+    }
+    return buildAccountMatch(record, 'name', candidate);
+  } catch (error) {
+    Logger.log('[Zoho] searchAccountsByName error: ' + error);
+    return null;
+  }
+}
+
+function searchAccountsByDomain(domain, candidate) {
+  const normalized = normalizeDomain(domain);
+  if (!normalized) return null;
+  try {
+    const criteria = encodeURIComponent('(Website:contains:' + normalized + ')');
+    const response = callZohoApi('/crm/v2/Accounts/search?criteria=' + criteria, 'get');
+    return buildAccountMatch(pickZohoRecord(response), 'domain', candidate);
+  } catch (error) {
+    Logger.log('[Zoho] searchAccountsByDomain error: ' + error);
+    return null;
+  }
+}
+
+function searchContactsByEmail(email, candidate) {
+  const normalized = (email || '').toString().trim().toLowerCase();
+  if (!normalized) return null;
+  try {
+    const criteria = encodeURIComponent('(Email:equals:' + normalized + ')');
+    const response = callZohoApi('/crm/v2/Contacts/search?criteria=' + criteria, 'get');
+    return buildContactMatch(pickZohoRecord(response), 'email', candidate);
+  } catch (error) {
+    Logger.log('[Zoho] searchContactsByEmail error: ' + error);
+    return null;
+  }
+}
+
+function searchContactByNameAndEmail(firstName, lastName, email, candidate) {
+  const normalizedEmail = (email || '').toString().trim().toLowerCase();
+  if (!normalizedEmail) return null;
+  const fn = (firstName || '').toString().trim();
+  const ln = (lastName || '').toString().trim();
+  const parts = [];
+  if (fn) parts.push('(First_Name:equals:' + fn + ')');
+  if (ln) parts.push('(Last_Name:equals:' + ln + ')');
+  parts.push('(Email:equals:' + normalizedEmail + ')');
+  const criteria = encodeURIComponent('(' + parts.join(' and ') + ')');
+  try {
+    const response = callZohoApi('/crm/v2/Contacts/search?criteria=' + criteria, 'get');
+    return buildContactMatch(pickZohoRecord(response), 'name+email', candidate);
+  } catch (error) {
+    Logger.log('[Zoho] searchContactByNameAndEmail error: ' + error);
+    return null;
+  }
+}
+
+function searchContactsByPhone(phone, candidate) {
+  const normalized = normalizePhone(phone);
+  if (!normalized) return null;
+  try {
+    const criteria = encodeURIComponent('((Phone:contains:' + normalized + ') or (Mobile:contains:' + normalized + '))');
+    const response = callZohoApi('/crm/v2/Contacts/search?criteria=' + criteria, 'get');
+    return buildContactMatch(pickZohoRecord(response), 'phone', candidate);
+  } catch (error) {
+    Logger.log('[Zoho] searchContactsByPhone error: ' + error);
+    return null;
+  }
+}
+
+function accountNeedsEnrichment(candidate, record) {
+  if (!candidate || !record) return false;
+  const map = {
+    phone: 'Phone',
+    email: 'Email',
+    website: 'Website',
+    billingStreet: 'Billing_Street',
+    billingCity: 'Billing_City',
+    billingZip: 'Billing_Code',
+    billingState: 'Billing_State'
+  };
+  return Object.keys(map).some(key => {
+    const candidateValue = candidate[key];
+    if (!candidateValue) return false;
+    const zohoField = map[key];
+    const zohoValue = record[zohoField];
+    return !zohoValue || zohoValue === '';
+  });
+}
+
+function contactNeedsEnrichment(candidate, record) {
+  if (!candidate || !record) return false;
+  const map = {
+    phone: 'Phone',
+    mobile: 'Mobile',
+    email: 'Email',
+    designation: 'Designation',
+    department: 'Department'
+  };
+  return Object.keys(map).some(key => {
+    const candidateValue = candidate[key];
+    if (!candidateValue) return false;
+    const zohoField = map[key];
+    const zohoValue = record[zohoField];
+    return !zohoValue || zohoValue === '';
+  });
+}
+
+function getCandidateDomain(candidate) {
+  if (!candidate) return '';
+  if (candidate.domain) return candidate.domain;
+  if (candidate.websiteDomain) return candidate.websiteDomain;
+  if (candidate.website) return candidate.website;
+  if (candidate.email) {
+    const parts = candidate.email.split('@');
+    if (parts.length === 2) return parts[1];
+  }
+  if (candidate.emails && candidate.emails.length) {
+    const entry = candidate.emails.find(e => e);
+    if (entry) {
+      const value = typeof entry === 'string' ? entry : entry.value;
+      if (value && value.includes('@')) {
+        return value.split('@')[1];
+      }
+    }
+  }
+  return '';
+}
+
+function resolveCandidateEmail(candidate) {
+  if (!candidate) return '';
+  if (candidate.email) return candidate.email;
+  if (Array.isArray(candidate.emails) && candidate.emails.length) {
+    const entry = candidate.emails.find(e => e);
+    if (entry) {
+      return typeof entry === 'string' ? entry : entry.value || '';
+    }
+  }
+  return '';
+}
+
+function resolveCandidatePhone(candidate) {
+  if (!candidate) return '';
+  if (candidate.phone) return candidate.phone;
+  if (candidate.mobile) return candidate.mobile;
+  if (Array.isArray(candidate.phones) && candidate.phones.length) {
+    const entry = candidate.phones.find(e => e);
+    if (entry) {
+      return typeof entry === 'string' ? entry : entry.value || '';
+    }
+  }
+  if (Array.isArray(candidate.mobiles) && candidate.mobiles.length) {
+    const entry = candidate.mobiles.find(e => e);
+    if (entry) {
+      return typeof entry === 'string' ? entry : entry.value || '';
+    }
+  }
+  return '';
+}
+
+function parseJsonArrayProperty(props, key) {
+  const raw = props.getProperty(key);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map(entry => {
+          if (entry === null || entry === undefined) return '';
+          return entry.toString().trim();
+        })
+        .filter(Boolean);
+    }
+  } catch (error) {
+    Logger.log('[IgnoreRules] Nie można sparsować ' + key + ': ' + error.toString());
+  }
+  return [];
+}
+
+function loadIgnoreRules() {
+  const props = PropertiesService.getScriptProperties();
+  const domainList = parseJsonArrayProperty(props, 'IGNORED_DOMAINS_JSON')
+    .map(normalizeDomain)
+    .filter(Boolean);
+  const companyList = parseJsonArrayProperty(props, 'IGNORED_COMPANIES_JSON')
+    .map(normalizeCompanyName)
+    .filter(Boolean);
+  const patternList = parseJsonArrayProperty(props, 'IGNORED_PATTERNS_JSON')
+    .map(value => value.toString().toLowerCase())
+    .filter(Boolean);
+
+  return {
+    hasRules: Boolean(domainList.length || companyList.length || patternList.length),
+    domainSet: new Set(domainList),
+    companySet: new Set(companyList),
+    patterns: patternList
+  };
+}
+
+function getDomainFromEmail(email) {
+  if (!email) return '';
+  const parts = email.toString().trim().split('@');
+  if (parts.length !== 2) return '';
+  return normalizeDomain(parts[1]);
+}
+
+function matchesIgnorePatterns(values, patterns) {
+  if (!patterns || !patterns.length) return false;
+  return values.some(value => {
+    if (!value) return false;
+    const normalized = value.toString().toLowerCase();
+    return patterns.some(pattern => normalized.indexOf(pattern) !== -1);
+  });
+}
+
+function shouldIgnoreCompany(company, rules) {
+  if (!company || !rules || !rules.hasRules) return null;
+
+  const domain = getCandidateDomain(company);
+  if (domain && rules.domainSet.has(domain)) {
+    return { reason: 'domain', value: domain };
+  }
+
+  const name = normalizeCompanyName(company.company_name || company.name || '');
+  if (name && rules.companySet.has(name)) {
+    return { reason: 'company', value: name };
+  }
+
+  if (
+    matchesIgnorePatterns(
+      [
+        company.company_name,
+        company.name,
+        company.friendly_name,
+        domain,
+        company.website,
+        company.notes
+      ],
+      rules.patterns
+    )
+  ) {
+    return { reason: 'pattern', value: company.company_name || company.name || domain };
+  }
+
+  return null;
+}
+
+function shouldIgnoreContact(contact, rules) {
+  if (!contact || !rules || !rules.hasRules) return null;
+
+  const email = resolveCandidateEmail(contact);
+  const domain = getDomainFromEmail(email) || getCandidateDomain(contact);
+  if (domain && rules.domainSet.has(domain)) {
+    return { reason: 'domain', value: domain };
+  }
+
+  const companyName = normalizeCompanyName(contact.company_name || contact.company || '');
+  if (companyName && rules.companySet.has(companyName)) {
+    return { reason: 'company', value: companyName };
+  }
+
+  const fullName = [
+    contact.first_name || contact.firstName || '',
+    contact.last_name || contact.lastName || ''
+  ]
+    .join(' ')
+    .trim();
+
+  if (
+    matchesIgnorePatterns(
+      [
+        fullName,
+        email,
+        domain,
+        contact.phone,
+        contact.mobile,
+        contact.designation,
+        contact.department
+      ],
+      rules.patterns
+    )
+  ) {
+    return { reason: 'pattern', value: fullName || email || domain };
+  }
+
+  return null;
+}
+
+function applyIgnoreFilters(analysis, rules) {
+  const source = analysis || {};
+  const companiesSource = Array.isArray(source.companies) ? source.companies : [];
+  const contactsSource = Array.isArray(source.contacts) ? source.contacts : [];
+
+  if (!rules || !rules.hasRules) {
+    return {
+      companies: companiesSource.slice(),
+      contacts: contactsSource.slice(),
+      ignoredCompanies: 0,
+      ignoredContacts: 0
+    };
+  }
+
+  const filteredCompanies = [];
+  let ignoredCompanies = 0;
+  companiesSource.forEach(company => {
+    const reason = shouldIgnoreCompany(company, rules);
+    if (reason) {
+      ignoredCompanies += 1;
+      Logger.log(
+        '[GAS][Ignore] Pomijam firmę (' +
+          reason.reason +
+          '): ' +
+          (company.company_name || company.name || '[brak nazwy]')
+      );
+      return;
+    }
+    filteredCompanies.push(company);
+  });
+
+  const filteredContacts = [];
+  let ignoredContacts = 0;
+  contactsSource.forEach(contact => {
+    const reason = shouldIgnoreContact(contact, rules);
+    if (reason) {
+      ignoredContacts += 1;
+      const contactName =
+        (contact.first_name || contact.firstName || '') +
+        ' ' +
+        (contact.last_name || contact.lastName || '');
+      let displayName = contactName.trim();
+      if (!displayName) {
+        displayName = contact.email || resolveCandidateEmail(contact) || '[brak nazwy]';
+      }
+      Logger.log(
+        '[GAS][Ignore] Pomijam kontakt (' +
+          reason.reason +
+          '): ' +
+          displayName
+      );
+      return;
+    }
+    filteredContacts.push(contact);
+  });
+
+  return {
+    companies: filteredCompanies,
+    contacts: filteredContacts,
+    ignoredCompanies: ignoredCompanies,
+    ignoredContacts: ignoredContacts
+  };
+}
+
+function emptyMatch() {
+  return {
+    existsInCrm: false,
+    crmId: null,
+    crmData: null,
+    matchSource: null,
+    needsEnrichment: false
+  };
+}
+
+function matchAccountCandidate(candidate) {
+  if (!candidate) return emptyMatch();
+
+  var candidateJson = JSON.stringify(candidate);
+  Logger.log('[Zoho Matching] 🔍 Account candidate: ' + candidateJson);
+  saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Account candidate: ' + candidateJson });
+
+  var match = null;
+
+  if (candidate.nip) {
+    Logger.log('[Zoho Matching] Szukam po NIP: ' + candidate.nip);
+    match = searchAccountsByNip(candidate.nip, candidate);
+    if (match && match.existsInCrm) {
+      Logger.log('[Zoho Matching] ✅ Match by NIP, crmId=' + match.crmId);
+      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by NIP: crmId=' + match.crmId });
+      return match;
+    }
+  }
+
+  if (candidate.name || candidate.company_name) {
+    var name = candidate.name || candidate.company_name;
+    Logger.log('[Zoho Matching] Szukam po nazwie: ' + name);
+    match = searchAccountsByName(name, candidate);
+    if (match && match.existsInCrm) {
+      Logger.log('[Zoho Matching] ✅ Match by name, crmId=' + match.crmId);
+      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by name: crmId=' + match.crmId });
+      return match;
+    }
+  }
+
+  var domain = getCandidateDomain(candidate);
+  if (domain) {
+    Logger.log('[Zoho Matching] Szukam po domenie: ' + domain);
+    match = searchAccountsByDomain(domain, candidate);
+    if (match && match.existsInCrm) {
+      Logger.log('[Zoho Matching] ✅ Match by domain, crmId=' + match.crmId);
+      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by domain: crmId=' + match.crmId });
+      return match;
+    }
+  }
+
+  Logger.log('[Zoho Matching] ❌ Account not found in CRM');
+  saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Account not found: ' + (candidate.company_name || candidate.name || 'unknown') });
+  return emptyMatch();
+}
+
+function matchContactCandidate(candidate) {
+  if (!candidate) return emptyMatch();
+
+  var candidateJson = JSON.stringify(candidate);
+  Logger.log('[Zoho Matching] 🔍 Contact candidate: ' + candidateJson);
+  saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Contact candidate: ' + candidateJson });
+
+  var match = null;
+  var email = resolveCandidateEmail(candidate);
+  if (email) {
+    Logger.log('[Zoho Matching] Szukam po email: ' + email);
+    match = searchContactsByEmail(email, candidate);
+    if (match && match.existsInCrm) {
+      Logger.log('[Zoho Matching] ✅ Match by email, crmId=' + match.crmId);
+      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by email: crmId=' + match.crmId });
+      return match;
+    }
+    // LLM zwraca first_name / last_name, ale obsługujemy też firstName / lastName
+    var firstName = candidate.first_name || candidate.firstName || '';
+    var lastName = candidate.last_name || candidate.lastName || '';
+    if (firstName || lastName) {
+      Logger.log('[Zoho Matching] Szukam po name+email: ' + firstName + ' ' + lastName + ' / ' + email);
+      match = searchContactByNameAndEmail(firstName, lastName, email, candidate);
+      if (match && match.existsInCrm) {
+        Logger.log('[Zoho Matching] ✅ Match by name + email, crmId=' + match.crmId);
+        saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by name+email: crmId=' + match.crmId });
+        return match;
+      }
+    }
+  }
+
+  var phone = resolveCandidatePhone(candidate);
+  if (phone) {
+    Logger.log('[Zoho Matching] Szukam po telefonie: ' + phone);
+    match = searchContactsByPhone(phone, candidate);
+    if (match && match.existsInCrm) {
+      Logger.log('[Zoho Matching] ✅ Match by phone, crmId=' + match.crmId);
+      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by phone: crmId=' + match.crmId });
+      return match;
+    }
+  }
+
+  var contactName = (candidate.first_name || '') + ' ' + (candidate.last_name || '');
+  Logger.log('[Zoho Matching] ❌ Contact not found in CRM: ' + contactName.trim());
+  saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Contact not found: ' + contactName.trim() });
+  return emptyMatch();
+}
+
 // Funkcja do pobrania lub utworzenia folderu z logami
 function getOrCreateLogFolder() {
   const folders = DriveApp.getFoldersByName(LOG_FOLDER_NAME);
@@ -61,6 +701,65 @@ function saveLogToDrive(logData) {
       success: false,
       error: error.toString()
     };
+  }
+}
+
+function truncateForLog(value, maxLength) {
+  if (!value) return '';
+  const str = value.toString();
+  if (str.length <= maxLength) return str;
+  return str.substring(0, Math.max(0, maxLength - 3)) + '...';
+}
+
+function logFetchedMessagesSummary(context, details) {
+  try {
+    if (!details || !Array.isArray(details.messages)) {
+      return;
+    }
+    const header =
+      `${context} | thread=${details.threadId || '-'} | refMessage=${details.messageId || '-'} | count=${details.messages.length}`;
+    const lines = details.messages.map((item, idx) => {
+      const parts = [
+        `[${idx + 1}] msg=${item.id || '-'}`,
+        `from=${truncateForLog(item.from || '', 50)}`,
+        `subj=${truncateForLog(item.subject || '', 80)}`,
+        `plainChars=${item.plainChars || 0}`
+      ];
+      if (item.htmlChars !== undefined) {
+        parts.push(`htmlChars=${item.htmlChars}`);
+      }
+      if (item.snippetChars !== undefined) {
+        parts.push(`snippetChars=${item.snippetChars}`);
+      }
+      if (item.attachmentsCount !== undefined) {
+        parts.push(`attachments=${item.attachmentsCount}`);
+      }
+      return '  ' + parts.join(' | ');
+    });
+    saveLogToDrive({
+      source: 'GMAIL_FETCH',
+      message: header + '\n' + lines.join('\n')
+    });
+  } catch (error) {
+    Logger.log('[LogHelper] logFetchedMessagesSummary error: ' + error);
+  }
+}
+
+function logGeminiJsonResult(messageId, analysis, metadata) {
+  try {
+    if (!analysis) return;
+    const jsonString = JSON.stringify(analysis);
+    const metaInfo = metadata ? JSON.stringify(metadata) : '{}';
+    const message =
+      `messageId=${messageId || '-'} | jsonLength=${jsonString.length}\n` +
+      `metadata=${metaInfo}\n` +
+      jsonString;
+    saveLogToDrive({
+      source: 'GEMINI_JSON',
+      message: message
+    });
+  } catch (error) {
+    Logger.log('[LogHelper] logGeminiJsonResult error: ' + error);
   }
 }
 
@@ -134,6 +833,28 @@ function fetchMessageFull(messageId, threadId) {
         error: 'Wiadomość nie znaleziona'
       };
     }
+    const messageThread = message.getThread();
+    const derivedThreadId = threadId || (messageThread ? messageThread.getId() : '');
+    const plainBody = message.getPlainBody();
+    const htmlBody = message.getBody();
+    const attachments = message.getAttachments().map(att => ({
+      name: att.getName(),
+      size: att.getSize(),
+      type: att.getContentType()
+    }));
+
+    logFetchedMessagesSummary('FETCH_MESSAGE', {
+      threadId: derivedThreadId,
+      messageId: messageId,
+      messages: [{
+        id: messageId,
+        from: message.getFrom(),
+        subject: message.getSubject(),
+        plainChars: plainBody ? plainBody.length : 0,
+        htmlChars: htmlBody ? htmlBody.length : 0,
+        attachmentsCount: attachments.length
+      }]
+    });
     
     return {
       success: true,
@@ -145,13 +866,9 @@ function fetchMessageFull(messageId, threadId) {
       cc: message.getCc(),
       bcc: message.getBcc(),
       date: message.getDate().toISOString(),
-      plainBody: message.getPlainBody(),
-      htmlBody: message.getBody(),
-      attachments: message.getAttachments().map(att => ({
-        name: att.getName(),
-        size: att.getSize(),
-        type: att.getContentType()
-      })),
+      plainBody: plainBody,
+      htmlBody: htmlBody,
+      attachments: attachments,
       headers: {
         'Message-ID': message.getId(),
         'Reply-To': message.getReplyTo()
@@ -256,6 +973,19 @@ function fetchThreadFull(threadId, messageId) {
           };
         });
 
+        const summaryEntries = messages.map(m => ({
+          id: m.messageId,
+          from: m.from,
+          subject: m.subject,
+          plainChars: m.plainBody ? m.plainBody.length : 0,
+          snippetChars: m.snippet ? m.snippet.length : 0
+        }));
+        logFetchedMessagesSummary('FETCH_THREAD', {
+          threadId: threadId || apiThreadId,
+          messageId: messageId,
+          messages: summaryEntries
+        });
+
         return {
           // Zwracamy oba identyfikatory: UI threadId (z URL) oraz apiThreadId z Gmail API
           success: true,
@@ -303,8 +1033,15 @@ function doPost(e) {
       } else if (data.action === 'get-thread-metadata') {
         // Thread Intelligence: szybkie sprawdzenie messageCount (20-50ms)
         result = getThreadMetadata(data.messageId);
-      } else if (data.action === 'fetch-thread-full') {
+    } else if (data.action === 'fetch-thread-full') {
         result = fetchThreadFull(data.threadId, data.messageId);
+      } else if (data.action === 'analyze-message') {
+        // ETAP 4: Analiza LLM (Mock w 4.0, prawdziwy Cloud Run w 4.1)
+        result = analyzeMessage(data.messageId);
+    } else if (data.action === 'match-account') {
+      result = matchAccountCandidate(data.candidate || {});
+    } else if (data.action === 'match-contact') {
+      result = matchContactCandidate(data.candidate || {});
       } else {
         result = {
           success: false,
@@ -368,5 +1105,292 @@ function testGmailAPI() {
     Logger.log('Message ID: ' + message.getId());
     Logger.log('Subject: ' + message.getSubject());
     Logger.log('From: ' + message.getFrom());
+  }
+}
+
+// ========== ETAP 4.1: LLM Analysis (Cloud Run + Gemini 2.5 Pro) ==========
+
+// Cloud Run endpoint URL (zaktualizuj po deployment)
+const CLOUD_RUN_URL = "https://gmail-crm-llm-backend-183771205172.europe-central2.run.app/analyze";
+
+/**
+ * Wykonuje matching z Zoho CRM dla wyników analizy LLM
+ * Używane zarówno dla cache hit jak i nowej analizy
+ * 
+ * @param {string} messageId - ID wiadomości Gmail
+ * @param {Object} filteredAnalysis - Wynik analizy po filtrach ignore
+ * @param {Object} metadata - Metadata z Cloud Run
+ * @returns {Object} - { success: true, analysis: {...}, metadata: {...} }
+ */
+function performZohoMatching(messageId, filteredAnalysis, metadata) {
+  Logger.log('[GAS] 🔍 Matching z Zoho CRM START...');
+  const matchStart = Date.now();
+  
+  const resultMetadata = Object.assign({}, metadata || {});
+  resultMetadata.ignoredCompanies = filteredAnalysis.ignoredCompanies || 0;
+  resultMetadata.ignoredContacts = filteredAnalysis.ignoredContacts || 0;
+  
+  // Match firms
+  const enrichedCompanies = (filteredAnalysis.companies || []).map(function(company, idx) {
+    Logger.log('[GAS] 🏢 Matching firma ' + (idx + 1) + '/' + (filteredAnalysis.companies || []).length + ': ' + (company.company_name || 'bez nazwy'));
+    try {
+      const match = matchAccountCandidate(company);
+      if (match && match.existsInCrm) {
+        company.existsInCrm = true;
+        company.crmId = match.crmId;
+        company.crmData = match.crmData;
+        company.matchSource = match.matchSource;
+        company.needsEnrichment = match.needsEnrichment;
+        company.category = match.needsEnrichment ? 'existing_enrichable' : 'existing_complete';
+        
+        Logger.log('[GAS] ✅ Firma matched: existsInCrm=true' + 
+                   ', matchSource=' + match.matchSource + 
+                   ', needsEnrichment=' + match.needsEnrichment +
+                   ', category=' + company.category);
+      } else {
+        company.existsInCrm = false;
+        company.crmId = null;
+        company.crmData = null;
+        company.matchSource = null;
+        company.needsEnrichment = false;
+        var hasBasicData = company.company_name && (company.nip || company.website || company.phone);
+        company.category = hasBasicData ? 'new_complete' : 'new_partial';
+        Logger.log('[GAS] ℹ️ Firma nie znaleziona w CRM (nowy rekord), category=' + company.category);
+      }
+    } catch (matchError) {
+      Logger.log('[GAS] ⚠️ Błąd matchingu firmy: ' + matchError.toString());
+      company.existsInCrm = false;
+      company.crmId = null;
+      company.crmData = null;
+      company.matchSource = null;
+      company.needsEnrichment = false;
+      company.category = 'new_partial';
+    }
+    return company;
+  });
+  
+  // Match contacts
+  const enrichedContacts = (filteredAnalysis.contacts || []).map(function(contact, idx) {
+    Logger.log('[GAS] 👤 Matching kontakt ' + (idx + 1) + '/' + (filteredAnalysis.contacts || []).length + ': ' + 
+               (contact.first_name || '') + ' ' + (contact.last_name || ''));
+    try {
+      const match = matchContactCandidate(contact);
+      if (match && match.existsInCrm) {
+        contact.existsInCrm = true;
+        contact.crmId = match.crmId;
+        contact.crmData = match.crmData;
+        contact.matchSource = match.matchSource;
+        contact.needsEnrichment = match.needsEnrichment;
+        contact.category = match.needsEnrichment ? 'existing_enrichable' : 'existing_complete';
+        
+        Logger.log('[GAS] ✅ Kontakt matched: existsInCrm=true' + 
+                   ', matchSource=' + match.matchSource + 
+                   ', needsEnrichment=' + match.needsEnrichment +
+                   ', category=' + contact.category);
+      } else {
+        contact.existsInCrm = false;
+        contact.crmId = null;
+        contact.crmData = null;
+        contact.matchSource = null;
+        contact.needsEnrichment = false;
+        var hasBasicData = contact.first_name && contact.last_name && contact.email;
+        contact.category = hasBasicData ? 'new_complete' : 'new_partial';
+        Logger.log('[GAS] ℹ️ Kontakt nie znaleziony w CRM (nowy rekord), category=' + contact.category);
+      }
+    } catch (matchError) {
+      Logger.log('[GAS] ⚠️ Błąd matchingu kontaktu: ' + matchError.toString());
+      contact.existsInCrm = false;
+      contact.crmId = null;
+      contact.crmData = null;
+      contact.matchSource = null;
+      contact.needsEnrichment = false;
+      contact.category = 'new_partial';
+    }
+    return contact;
+  });
+  
+  const matchTime = Date.now() - matchStart;
+  Logger.log('[GAS] 🔍 Matching COMPLETE: ' + matchTime + 'ms');
+  
+  return {
+    success: true,
+    messageId: messageId,
+    analysis: {
+      companies: enrichedCompanies,
+      contacts: enrichedContacts
+    },
+    metadata: resultMetadata,
+    analyzedAt: new Date().toISOString()
+  };
+}
+
+/**
+ * ETAP 4.1: Endpoint do analizy wiadomości przez LLM (Cloud Run + Gemini 2.5 Pro)
+ * 
+ * OPTYMALIZACJA: Najpierw sprawdza cache w Firestore (przez /check-cache endpoint).
+ * Jeśli cache hit - nie pobiera emaila z Gmail, tylko wykonuje matching z Zoho.
+ * Jeśli cache miss - pobiera email i wywołuje /analyze.
+ * 
+ * @param {string} messageId - ID wiadomości Gmail
+ * @param {string} threadId - ID wątku Gmail (opcjonalnie)
+ * @returns {Object} - { success: true, analysis: {...} }
+ */
+function analyzeMessage(messageId, threadId) {
+  try {
+    if (!messageId || messageId.trim() === '') {
+      return {
+        success: false,
+        error: 'messageId jest pusty'
+      };
+    }
+    
+    Logger.log('[GAS] 🤖 analyzeMessage START (Cloud Run): ' + messageId);
+    
+    // ========== KROK 1: Sprawdź cache w Firestore ZANIM pobierzemy email ==========
+    const checkCacheUrl = CLOUD_RUN_URL.replace('/analyze', '/check-cache');
+    Logger.log('[GAS] 🔍 Sprawdzam cache w Firestore: ' + checkCacheUrl);
+    
+    try {
+      const cacheCheckOptions = {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify({ messageId: messageId }),
+        muteHttpExceptions: true
+      };
+      
+      const cacheResponse = UrlFetchApp.fetch(checkCacheUrl, cacheCheckOptions);
+      const cacheCode = cacheResponse.getResponseCode();
+      
+      if (cacheCode === 200) {
+        const cacheResult = JSON.parse(cacheResponse.getContentText());
+        
+        if (cacheResult.success && cacheResult.cached) {
+          Logger.log('[GAS] 💾 CACHE HIT! Zwracam wynik z Firestore bez pobierania emaila');
+          Logger.log('[GAS] Original analyzed at: ' + (cacheResult.metadata?.originalAnalyzedAt || 'unknown'));
+          
+          // Mamy wynik z cache - teraz musimy wykonać matching z Zoho
+          const analysisPayload = cacheResult.analysis || {};
+          const sourceCompanies = Array.isArray(analysisPayload.companies) ? analysisPayload.companies : [];
+          const sourceContacts = Array.isArray(analysisPayload.contacts) ? analysisPayload.contacts : [];
+          
+          Logger.log('[GAS] Cache analysis: ' + sourceCompanies.length + ' companies, ' + sourceContacts.length + ' contacts');
+          
+          // Zastosuj filtry ignore
+          const ignoreRules = loadIgnoreRules();
+          const filteredAnalysis = applyIgnoreFilters(analysisPayload, ignoreRules);
+          Logger.log('[GAS] 🚫 Ignore filters: firmy=' + filteredAnalysis.ignoredCompanies + ', kontakty=' + filteredAnalysis.ignoredContacts);
+          
+          // Wykonaj matching z Zoho CRM
+          return performZohoMatching(messageId, filteredAnalysis, cacheResult.metadata || {});
+        } else {
+          Logger.log('[GAS] ❌ CACHE MISS - kontynuuję z pełną analizą');
+        }
+      } else {
+        Logger.log('[GAS] ⚠️ Cache check failed (HTTP ' + cacheCode + '), kontynuuję z pełną analizą');
+      }
+    } catch (cacheError) {
+      Logger.log('[GAS] ⚠️ Cache check error: ' + cacheError.toString() + ', kontynuuję z pełną analizą');
+    }
+    
+    // ========== KROK 2: Cache miss - pobierz email i wywołaj analizę ==========
+    Logger.log('[GAS] 📧 Pobieram wiadomość z Gmail...');
+    
+    // Pobierz pełną wiadomość (format RAW dla pełnego kontekstu)
+    const message = GmailApp.getMessageById(messageId);
+    if (!message) {
+      return {
+        success: false,
+        error: 'Nie znaleziono wiadomości o ID: ' + messageId
+      };
+    }
+    
+    // Pobierz pełną treść wiadomości
+    // Używamy getPlainBody() + getFrom() + getSubject() dla lepszego kontekstu
+    const emailContent = 
+      'Subject: ' + message.getSubject() + '\n' +
+      'From: ' + message.getFrom() + '\n' +
+      'Date: ' + message.getDate() + '\n' +
+      'To: ' + message.getTo() + '\n\n' +
+      message.getPlainBody();
+    
+    Logger.log('[GAS] 📧 Email content length: ' + emailContent.length + ' chars');
+    
+    // Przygotuj payload dla Cloud Run
+    const payload = {
+      messageId: messageId,
+      threadId: threadId || message.getThread().getId(),
+      fullRawEmail: emailContent
+    };
+    
+    // Wywołaj Cloud Run
+    Logger.log('[GAS] 🚀 Calling Cloud Run /analyze: ' + CLOUD_RUN_URL);
+    
+    const options = {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true // Obsługujemy błędy HTTP manualnie
+    };
+    
+    const response = UrlFetchApp.fetch(CLOUD_RUN_URL, options);
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+    
+    Logger.log('[GAS] 📡 Cloud Run response code: ' + responseCode);
+    
+    if (responseCode !== 200) {
+      Logger.log('[GAS] ❌ Cloud Run error: ' + responseText);
+      return {
+        success: false,
+        error: 'Cloud Run error (HTTP ' + responseCode + '): ' + responseText
+      };
+    }
+    
+    // Parse odpowiedź z Cloud Run
+    const result = JSON.parse(responseText);
+    
+    if (!result.success) {
+      Logger.log('[GAS] ❌ Cloud Run returned error: ' + result.error);
+      return {
+        success: false,
+        error: result.error
+      };
+    }
+    
+    const analysisPayload = result.analysis || {};
+    const sourceCompanies = Array.isArray(analysisPayload.companies) ? analysisPayload.companies : [];
+    const sourceContacts = Array.isArray(analysisPayload.contacts) ? analysisPayload.contacts : [];
+    
+    // Loguj czy wynik był z Firestore cache (fallback jeśli /check-cache nie zadziałał)
+    const isCached = result.metadata && result.metadata.cached;
+    if (isCached) {
+      Logger.log('[GAS] 💾 Cloud Run /analyze zwrócił wynik z Firestore CACHE (fallback)');
+      Logger.log('[GAS] Original analyzed at: ' + (result.metadata.originalAnalyzedAt || 'unknown'));
+    } else {
+      Logger.log('[GAS] 🆕 Cloud Run wykonał NOWĄ analizę Gemini');
+    }
+    
+    Logger.log('[GAS] ✅ analyzeMessage COMPLETE (Cloud Run): ' + messageId);
+    Logger.log('[GAS] Analysis: ' + 
+      sourceCompanies.length + ' companies, ' + 
+      sourceContacts.length + ' contacts');
+    Logger.log('[GAS] Processing time: ' + (result.metadata ? result.metadata.processingTimeMs : '?') + 'ms');
+    
+    logGeminiJsonResult(messageId, analysisPayload, result.metadata || {});
+    
+    // ========== Filtry IGNORE po stronie GAS ==========
+    const ignoreRules = loadIgnoreRules();
+    const filteredAnalysis = applyIgnoreFilters(analysisPayload, ignoreRules);
+    Logger.log('[GAS] 🚫 Ignore filters: firmy=' + filteredAnalysis.ignoredCompanies + ', kontakty=' + filteredAnalysis.ignoredContacts);
+    
+    // ========== Użyj wspólnej funkcji do matchingu ==========
+    return performZohoMatching(messageId, filteredAnalysis, result.metadata);
+    
+  } catch (error) {
+    Logger.log('[GAS] ❌ Błąd analyzeMessage: ' + error.toString());
+    return {
+      success: false,
+      error: error.toString()
+    };
   }
 }

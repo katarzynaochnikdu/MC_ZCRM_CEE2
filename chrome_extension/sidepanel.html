@@ -13,7 +13,7 @@
     
     body {
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      padding: 20px;
+      padding: 8px;
       background-color: #f5f5f5;
       color: #333;
     }
@@ -21,74 +21,124 @@
     .container {
       background: white;
       border-radius: 8px;
-      padding: 20px;
+      padding: 10px;
       box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
-    
-    h1 {
-      font-size: 18px;
-      margin-bottom: 20px;
-      color: #1a73e8;
+
+    /* Kompaktowy nagłówek */
+    .compact-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 10px;
+      background: linear-gradient(135deg, #1a73e8 0%, #4285f4 100%);
+      border-radius: 6px;
+      margin-bottom: 8px;
     }
-    
-    .info-row {
-      margin-bottom: 15px;
-      padding: 10px;
-      background-color: #f8f9fa;
-      border-radius: 4px;
-    }
-    
-    .label {
-      font-weight: 600;
-      font-size: 12px;
-      color: #5f6368;
-      margin-bottom: 5px;
-    }
-    
-    .value {
-      font-family: 'Courier New', monospace;
+
+    .compact-header-title {
       font-size: 13px;
-      color: #202124;
-      word-break: break-all;
+      font-weight: 700;
+      color: #fff;
+      white-space: nowrap;
     }
-    
-    .no-data {
-      color: #999;
-      font-style: italic;
+
+    .compact-header-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 10px;
+      color: rgba(255,255,255,0.9);
     }
-    
+
+    .compact-header-meta .meta-item {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .compact-header-meta .meta-label {
+      opacity: 0.7;
+    }
+
+    .compact-header-meta .meta-value {
+      font-family: 'Courier New', monospace;
+      font-weight: 600;
+      max-width: 80px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .has-analysis-check {
+      color: #10b981;
+      font-weight: bold;
+      margin-left: 2px;
+    }
+
+    /* Status badge w nagłówku */
     .status {
-      padding: 4px 8px;
-      border-radius: 12px;
-      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-size: 9px;
       font-weight: 600;
       display: inline-block;
     }
     
     .status.active {
-      background-color: #e8f5e9;
+      background-color: rgba(255,255,255,0.9);
       color: #2e7d32;
     }
     
     .status.inactive {
-      background-color: #ffebee;
+      background-color: rgba(255,255,255,0.7);
       color: #c62828;
     }
     
     .status.loading {
-      background-color: #fff3e0;
+      background-color: rgba(255,255,255,0.8);
       color: #e65100;
     }
+
+    /* Kompaktowy pasek akcji */
+    .action-bar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .action-bar .fetch-btn {
+      flex: 1;
+      padding: 6px 10px;
+      font-size: 11px;
+    }
     
-    /* ETAP 2*: Przycisk pobierania wątku */
+    /* Ukryte stare elementy */
+    h1, .info-row {
+      display: none;
+    }
+    
+    .no-data {
+      color: #999;
+      font-style: italic;
+      font-size: 11px;
+    }
+    
+    .value {
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      color: #202124;
+      word-break: break-all;
+    }
+    
+    /* Przyciski akcji */
     .fetch-btn {
-      width: 100%;
-      padding: 10px 15px;
+      padding: 8px 12px;
       background-color: #1a73e8;
       color: white;
       border: none;
       border-radius: 4px;
-      font-size: 13px;
+      font-size: 11px;
       font-weight: 600;
       cursor: pointer;
       transition: background-color 0.2s;
@@ -106,45 +156,354 @@
       background-color: #ccc;
       cursor: not-allowed;
     }
+
+    .fetch-btn.btn-llm {
+      background-color: #7c3aed;
+    }
+
+    .fetch-btn.btn-llm:hover {
+      background-color: #6d28d9;
+    }
+
+    /* ===== Karty firm i kontaktów ===== */
+    #cardsSection {
+      margin-top: 6px;
+      display: none;
+    }
+
+    .cards-header {
+      display: none; /* Ukryty - niepotrzebny */
+    }
+
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 8px;
+      border-bottom: 1px solid #dadce0;
+    }
+
+    .tab {
+      flex: 1;
+      padding: 8px 6px;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: #5f6368;
+      border: 1px solid transparent;
+      border-radius: 4px 4px 0 0;
+      background: #f8f9fa;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .tab.active {
+      background: #fff;
+      border-color: #dadce0 #dadce0 #fff;
+      color: #1a73e8;
+    }
+
+    .tab-content {
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .tab-content.active {
+      display: flex;
+    }
+
+    .contact-card {
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 14px;
+      background: #fff;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+
+    .contact-card-header {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .contact-card-title-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .contact-card-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #202124;
+      text-transform: uppercase;
+      flex: 1;
+    }
+
+    .contact-status-badge {
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .badge-existing_enrichable { background: #fffbe6; color: #a15700; }
+    .badge-new_complete { background: #e3f2fd; color: #1565c0; }
+    .badge-new_partial { background: #fff3e0; color: #e65100; }
+    .badge-existing_complete { background: #f1f3f4; color: #5f6368; }
+
+    .contact-card-meta {
+      font-size: 11px;
+      color: #5f6368;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .match-source {
+      color: #1a73e8;
+      font-weight: 600;
+    }
+
+    .contact-card-body {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .form-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .form-field label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #5f6368;
+      text-transform: uppercase;
+    }
+
+    .form-field select,
+    .form-field input {
+      border: 1px solid #dadce0;
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 12px;
+      width: 100%;
+      background: #fff;
+    }
+
+    .input-with-picker {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .picker-meta {
+      font-size: 10px;
+      color: #9aa0a6;
+    }
+
+    .card-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn {
+      flex: 1;
+      padding: 8px 10px;
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .btn-primary {
+      background: #1a73e8;
+      color: #fff;
+    }
+
+    .btn-success {
+      background: #34a853;
+      color: #fff;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-small {
+      flex: none;
+      padding: 4px 8px;
+      font-size: 11px;
+    }
+
+    /* Edytowalne pola */
+    .form-field input[type="text"],
+    .form-field input[type="email"],
+    .form-field input[type="tel"] {
+      border: 1px solid #dadce0;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      width: 100%;
+      background: #fff;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .form-field input:focus,
+    .form-field select:focus {
+      outline: none;
+      border-color: #1a73e8;
+      box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.2);
+    }
+
+    .form-field input:required:invalid {
+      border-color: #ea4335;
+    }
+
+    .form-field label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    /* Picker z możliwością edycji */
+    .picker-select {
+      width: 100%;
+      margin-bottom: 4px;
+    }
+
+    .picker-custom-input {
+      margin-top: 4px;
+    }
+
+    /* Powiązanie z firmą */
+    .account-link-wrapper {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .linked-account-display {
+      font-size: 12px;
+      padding: 6px 8px;
+      background: #f8f9fa;
+      border-radius: 4px;
+      border: 1px solid #e0e0e0;
+    }
+
+    .linked-account-name {
+      font-weight: 600;
+      color: #1a73e8;
+    }
+
+    .linked-account-id {
+      font-size: 10px;
+      color: #9aa0a6;
+    }
+
+    .no-link {
+      font-size: 10px;
+      color: #ea4335;
+      font-style: italic;
+    }
+
+    /* Sekcje karty */
+    .contact-card-body {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding-top: 8px;
+      border-top: 1px solid #f0f0f0;
+    }
+
+    /* Wymagane pola */
+    .form-field label::after {
+      content: '';
+    }
+
+    /* Kategorie kart - kolorowe obramowanie */
+    .contact-card.category-existing_enrichable {
+      border-left: 3px solid #f59e0b;
+    }
+
+    .contact-card.category-new_complete {
+      border-left: 3px solid #1565c0;
+    }
+
+    .contact-card.category-new_partial {
+      border-left: 3px solid #e65100;
+    }
+
+    .contact-card.category-existing_complete {
+      border-left: 3px solid #9aa0a6;
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>🔵 ZCRM CCE2 - ETAP 2* (Auto-Full + Manual-Thread)</h1>
-    
-    <div class="info-row">
-      <div class="label">Stan Gmaila:</div>
-      <div class="value">
-        <span id="status" class="status inactive">Oczekiwanie...</span>
+    <!-- Kompaktowy nagłówek -->
+    <div class="compact-header">
+      <span class="compact-header-title">🔵 ZCRM</span>
+      <div class="compact-header-meta">
+        <span id="status" class="status inactive">⏸</span>
+        <div class="meta-item">
+          <span class="meta-label">msg:</span>
+          <span class="meta-value" id="messageId" title="Message ID">-</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">thd:</span>
+          <span class="meta-value" id="threadId" title="Thread ID">-</span>
+        </div>
       </div>
     </div>
-    
-    <div class="info-row">
-      <div class="label">Message ID:</div>
-      <div class="value" id="messageId">
-        <span class="no-data">Nie wykryto</span>
-      </div>
-    </div>
-    
-    <div class="info-row">
-      <div class="label">Thread ID:</div>
-      <div class="value" id="threadId">
-        <span class="no-data">-</span>
-      </div>
-    </div>
-    
-    <!-- ETAP 2*: Przycisk do pobierania pełnego wątku -->
-    <div class="info-row">
+
+    <!-- Pasek akcji -->
+    <div class="action-bar">
       <button id="fetchThreadBtn" class="fetch-btn" style="display: none;">
-        🧵 Pobierz cały wątek
+        🧵 Wątek
+      </button>
+      <button id="analyzeLLMBtn" class="fetch-btn btn-llm" style="display: none;">
+        🤖 Analizuj
       </button>
     </div>
 
-    <!-- ETAP 2: Sekcja danych pobranych z Gmail API -->
+    <!-- Stare elementy (ukryte, ale zachowane dla kompatybilności JS) -->
+    <div class="info-row" style="display:none;"></div>
+
+    <!-- ETAP 2: Sekcja danych pobranych z Gmail API (zwinięta) -->
     <div id="fetchedDataSection" style="display: none;">
-      <hr style="margin: 20px 0; border: none; border-top: 1px solid #e0e0e0;">
-      <h2 style="font-size: 14px; margin-bottom: 10px; color: #5f6368;">📩 Pobrane dane:</h2>
-      <div id="fetchedData" style="font-size: 12px; background: #f8f9fa; padding: 10px; border-radius: 4px; max-height: 300px; overflow-y: auto; white-space: pre-wrap; font-family: 'Courier New', monospace;"></div>
+      <details style="margin-bottom: 8px;">
+        <summary style="font-size: 11px; font-weight: 600; color: #5f6368; cursor: pointer;">📩 Pobrane dane</summary>
+        <div id="fetchedData" style="font-size: 10px; background: #f8f9fa; padding: 6px; border-radius: 4px; max-height: 150px; overflow-y: auto; white-space: pre-wrap; font-family: 'Courier New', monospace; margin-top: 4px;"></div>
+      </details>
+    </div>
+
+    <!-- ETAP 4: Sekcja analizy LLM (zwinięta) -->
+    <div id="analysisSection" style="display: none;">
+      <details style="margin-bottom: 8px;">
+        <summary style="font-size: 11px; font-weight: 600; color: #7c3aed; cursor: pointer;">🤖 JSON LLM</summary>
+        <div id="analysisData" style="font-size: 10px; background: #faf5ff; padding: 6px; border-radius: 4px; max-height: 150px; overflow-y: auto; white-space: pre-wrap; font-family: 'Courier New', monospace; border-left: 2px solid #7c3aed; margin-top: 4px;"></div>
+      </details>
+    </div>
+
+    <!-- ETAP 4+: Karty firm i kontaktów -->
+    <div id="cardsSection">
+      <div class="tabs">
+        <button class="tab active" data-tab="accounts">🏢 Firmy</button>
+        <button class="tab" data-tab="contacts">👤 Kontakty</button>
+      </div>
+      <div id="tab-accounts" class="tab-content active"></div>
+      <div id="tab-contacts" class="tab-content"></div>
     </div>
   </div>
   
