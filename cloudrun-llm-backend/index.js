@@ -127,7 +127,8 @@ Każdy obiekt:
   "mobile": "...",
   "email": "...",
   "company_name": "...",
-  "salutation": "Pan" / "Pani" / null
+  "salutation": "Pan" / "Pani" / null,
+  "contact_type": "Pracownik medyczny" / "Pracownik firmy" / "Pracownik stowarzyszeń i inne" / "Pracownik usługodawcy/dostawcy" / null
 }
 
 Zasady dla kontaktów:
@@ -138,6 +139,12 @@ Zasady dla kontaktów:
 - email = jeden najlepszy zawodowy adres osoby.
 - company_name = powiąż z firmą tylko, jeśli to oczywiste.
 - salutation = Pan/Pani jeśli pewne; inaczej null.
+- contact_type:
+  - "Pracownik medyczny" gdy osoba jest lekarzem / pielęgniarką / dietetykiem klinicznym / pracuje w szpitalu/klinice/instytucie medycznym (wynika z treści maila, stopki, domeny).
+  - "Pracownik firmy" gdy osoba reprezentuje firmę komercyjną/organizatora (np. organizacja konferencji, sprzedaż, marketing, eventy).
+  - "Pracownik stowarzyszeń i inne" gdy osoba reprezentuje stowarzyszenie, fundację, izbę, towarzystwo naukowe, uczelnię, urząd itp.
+  - "Pracownik usługodawcy/dostawcy" gdy osoba reprezentuje dostawcę usług/technologii, operatora, software house, agencję, firmę wdrożeniową itp.
+  - Jeśli nie masz wystarczających przesłanek → null (nie zgaduj).
 
 Jedna osoba = jeden obiekt.
 
