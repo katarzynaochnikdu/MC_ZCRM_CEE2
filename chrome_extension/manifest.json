@@ -18,11 +18,13 @@
     }
   },
   "permissions": [
-    "sidePanel"
+    "sidePanel",
+    "storage"
   ],
   "host_permissions": [
     "https://mail.google.com/*",
     "https://script.google.com/*",
+    "https://script.googleusercontent.com/*",
     "https://www.googletagmanager.com/*"
   ],
   "background": {

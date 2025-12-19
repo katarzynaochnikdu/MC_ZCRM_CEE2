@@ -56,7 +56,7 @@ gcloud services enable \
 2. Kliknij **"Create Database"**
 3. Wybierz:
    - **Firestore Native Mode**
-   - **Region**: `europe-west3` (Frankfurt) lub `us-central1` (Iowa)
+   - **Region**: `europe-west3` (Frankfurt) lub `europe-central2` (Iowa)
 4. **Kliknij "Create Database"**
 
 ### Lub przez `gcloud`:
@@ -104,7 +104,7 @@ ls -la  # Sprawdź czy masz: package.json, index.js, Dockerfile
 ```bash
 gcloud run deploy gmail-crm-llm-backend \
   --source . \
-  --region us-central1 \
+  --region europe-central2 \
   --platform managed \
   --allow-unauthenticated \
   --memory 1Gi \
@@ -117,7 +117,7 @@ gcloud run deploy gmail-crm-llm-backend \
 
 **Parametry:**
 - `--source .` – build z kodu źródłowego (automatyczny Dockerfile)
-- `--region us-central1` – region (możesz zmienić na `europe-west1`)
+- `--region europe-central2` – region (Warszawa, zalecany dla Polski)
 - `--allow-unauthenticated` – dostęp bez autentykacji (na start, zabezpieczymy później)
 - `--memory 1Gi` – 1 GB RAM (wystarczy dla Gemini)
 - `--cpu 1` – 1 vCPU
@@ -300,7 +300,7 @@ Deploy → New deployment → Web app → Deploy
 
 ### 7.2. Sprawdź logi Cloud Run
 
-https://console.cloud.google.com/run/detail/us-central1/gmail-crm-llm-backend/logs
+https://console.cloud.google.com/run/detail/europe-central2/gmail-crm-llm-backend/logs
 
 Powinny być wpisy:
 
@@ -324,7 +324,7 @@ Powinien być dokument z `messageId` jako ID.
 
 ### 8.1. Cloud Run Metrics
 
-https://console.cloud.google.com/run/detail/us-central1/gmail-crm-llm-backend/metrics
+https://console.cloud.google.com/run/detail/europe-central2/gmail-crm-llm-backend/metrics
 
 Monitoruj:
 - **Request count** – ile analiz dziennie
@@ -373,7 +373,7 @@ Każdy kto zna URL może wywołać endpoint.
 
 ```bash
 gcloud run services remove-iam-policy-binding gmail-crm-llm-backend \
-  --region=us-central1 \
+  --region=europe-central2 \
   --member="allUsers" \
   --role="roles/run.invoker"
 ```
@@ -392,7 +392,7 @@ PROJECT_ID@appspot.gserviceaccount.com
 
 ```bash
 gcloud run services add-iam-policy-binding gmail-crm-llm-backend \
-  --region=us-central1 \
+  --region=europe-central2 \
   --member="serviceAccount:gmail-crm-extension-479113@appspot.gserviceaccount.com" \
   --role="roles/run.invoker"
 ```
@@ -438,7 +438,7 @@ Jeśli nadal problem, sprawdź logi Cloud Run i zobacz raw response.
 
 ```bash
 gcloud run services update gmail-crm-llm-backend \
-  --region=us-central1 \
+  --region=europe-central2 \
   --timeout=120s
 ```
 
@@ -448,7 +448,7 @@ gcloud run services update gmail-crm-llm-backend \
 
 ```bash
 gcloud run services update gmail-crm-llm-backend \
-  --region=us-central1 \
+  --region=europe-central2 \
   --memory=2Gi
 ```
 
@@ -463,7 +463,7 @@ cd cloudrun-llm-backend
 
 gcloud run deploy gmail-crm-llm-backend \
   --source . \
-  --region us-central1
+  --region europe-central2
 ```
 
 Cloud Run automatycznie:
@@ -477,7 +477,7 @@ Cloud Run automatycznie:
 
 ```bash
 gcloud run services delete gmail-crm-llm-backend \
-  --region=us-central1
+  --region=europe-central2
 ```
 
 ---

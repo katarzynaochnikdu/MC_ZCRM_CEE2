@@ -36,6 +36,7 @@ Każdy obiekt ma format:
 {
   "company_name": "...",
   "company_friendly_name": "...",
+  "company_keyword": "...",
   "website": "...",
   "phone": "...",
   "email": "...",
@@ -45,6 +46,11 @@ Każdy obiekt ma format:
 ZASADY DLA FIRM:
 - company_name = pełna oficjalna nazwa organizacji
 - company_friendly_name = nazwa marki/produktu lub wersja potoczna
+- company_keyword = 1-2 słowa kluczowe do wyszukiwania firmy w CRM (unikalne, charakterystyczne)
+  * Wybierz najważniejsze słowo z nazwy firmy (NIE ogólne jak "Medical", "Polska", "Group")
+  * Przykłady: "Ringostat", "Hollywood", "SILCAN", "Ochnik"
+  * Jeśli nazwa jest bardzo ogólna, użyj 2 słów: "Digital Unity"
+  * Jeśli nie da się wybrać unikalnego słowa → null
 - website = główna domena firmowa (np. „firma.pl"), jeśli brak → null
 - phone = jeden główny numer firmowy, NIE osobisty; jeśli brak → null
 - email = jeden główny adres firmowy typu info@/office@/contact@; jeśli brak → null
@@ -66,7 +72,9 @@ Każdy obiekt:
   "phone": "...",
   "mobile": "...",
   "email": "...",
+  "email_is_personal": true / false,
   "company_name": "...",
+  "company_nip": "...",
   "salutation": "Pan" / "Pani" / null
 }
 
@@ -75,13 +83,19 @@ ZASADY DLA KONTAKTÓW:
 - role: stanowisko lub funkcja
 - phone: jeden numer służbowy (NIE komórkowy)
 - mobile: jeden numer komórkowy
-- email: jeden najlepszy zawodowy adres osoby
+- email: adres e-mail osoby (ZAWSZE zwróć jeśli jest, NIE POMIJAJ)
+- email_is_personal: WYMAGANE - czy email jest służbowy BEZPOŚREDNI do tej osoby?
+  * true = bezpośredni służbowy email do osoby (imie.nazwisko@firma.pl, j.kowalski@firma.pl, k.migdal@ringostat.com)
+  * false = email prywatny (gmail.com, wp.pl, o2.pl) LUB ogólny firmowy (info@, biuro@, kontakt@)
 - company_name: powiąż z firmą tylko jeśli to oczywiste
+- company_nip: NIP firmy kontaktu JEŚLI wynika z kontekstu (np. z podpisu, stopki); jeśli brak → null
 - salutation: "Pan"/"Pani" jeśli pewne; inaczej null
 
 WAŻNE:
 - Jedna osoba = jeden obiekt
 - Nie duplikuj kontaktów
+- ZWRACAJ WSZYSTKIE kontakty - nawet te z prywatnymi mailami (oznacz je jako email_is_personal: true)
+- NIE POMIJAJ kontaktów tylko dlatego że mają prywatny email
 
 5. REGUŁY OGÓLNE
 =================
@@ -121,6 +135,7 @@ OUTPUT:
     {
       "company_name": "Example Medical Sp. z o.o.",
       "company_friendly_name": "ExMed",
+      "company_keyword": "ExMed",
       "website": "exmed.pl",
       "phone": "+48 22 123 45 68",
       "email": "kontakt@exmed.pl",
@@ -135,7 +150,9 @@ OUTPUT:
       "phone": "+48 22 123 45 68",
       "mobile": "+48 600 123 456",
       "email": "j.kowalski@exmed.pl",
+      "email_is_personal": false,
       "company_name": "Example Medical Sp. z o.o.",
+      "company_nip": "1234567890",
       "salutation": "Pan"
     }
   ]

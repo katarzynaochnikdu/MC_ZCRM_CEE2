@@ -26,6 +26,10 @@ const tabButtons = document.querySelectorAll('#cardsSection .tab');
 const accountsTab = document.getElementById('tab-accounts');
 const contactsTab = document.getElementById('tab-contacts');
 
+// Przycisk czyszczenia cache + etykieta źródła danych
+const clearCacheBtn = document.getElementById('clearCacheBtn');
+const dataSourceLabel = document.getElementById('dataSourceLabel');
+
 // ETAP 2: Przechowuje aktualny stan (aby ignorować nieaktualne dane)
 let currentState = null;
 
@@ -86,11 +90,35 @@ function resetAnalysisData() {
   if (analysisSection) {
     analysisSection.style.display = 'none';
   }
+  if (dataSourceLabel) {
+    dataSourceLabel.style.display = 'none';
+    dataSourceLabel.textContent = '';
+  }
   llmState.hasAnalysis = false;
   llmState.analysisData = null;
   llmState.isAnalyzing = false;
   resetCardsSection();
   console.log('[Sidepanel] Wyczyszczono sekcję analizy LLM');
+}
+
+// Funkcja ustawiająca etykietę źródła danych
+function setDataSourceLabel(source) {
+  if (!dataSourceLabel) return;
+  
+  dataSourceLabel.style.display = 'inline-block';
+  
+  if (source === 'cache') {
+    dataSourceLabel.textContent = '📦 local cache';
+    dataSourceLabel.className = 'data-source-label source-cache';
+  } else if (source === 'firestore') {
+    dataSourceLabel.textContent = '🔥 Firestore';
+    dataSourceLabel.className = 'data-source-label source-firestore';
+  } else if (source === 'fresh') {
+    dataSourceLabel.textContent = '✨ fresh LLM';
+    dataSourceLabel.className = 'data-source-label source-fresh';
+  } else {
+    dataSourceLabel.style.display = 'none';
+  }
 }
 
 function resetCardsSection() {
@@ -1272,6 +1300,7 @@ if (analyzeLLMBtn) {
     if (llmState.hasAnalysis && llmState.analysisData) {
       console.log('[Sidepanel] 💾 Analiza już istnieje - wyświetlam z cache');
       displayAnalysisData(llmState.analysisData);
+      setDataSourceLabel('cache');
       return;
     }
 
@@ -1293,7 +1322,39 @@ if (analyzeLLMBtn) {
     // Wizualna informacja
     analysisSection.style.display = 'block';
     analysisData.textContent = '⏳ Analizuję wiadomość za pomocą LLM...';
+    if (dataSourceLabel) dataSourceLabel.style.display = 'none';
   });
+}
+
+// Obsługa przycisku "Wyczyść cache"
+if (clearCacheBtn) {
+  clearCacheBtn.addEventListener('click', () => {
+    console.log('[Sidepanel] 🗑️ CLICK na przycisk Wyczyść cache');
+    
+    // Wyślij żądanie do background.js
+    chrome.runtime.sendMessage({
+      type: 'clear-cache'
+    }).then(response => {
+      if (response && response.success) {
+        console.log('[Sidepanel] ✅ Cache wyczyszczony');
+        
+        // Reset lokalnego stanu
+        resetFetchedData();
+        resetThreadState();
+        resetAnalysisData();
+        
+        // Wizualna informacja
+        alert('✅ Cache wtyczki został wyczyszczony.\n\nPrzeładuj stronę Gmail i otwórz ponownie wiadomość, aby pobrać świeże dane.');
+      } else {
+        console.log('[Sidepanel] ❌ Błąd czyszczenia cache:', response?.error);
+        alert('❌ Nie udało się wyczyścić cache: ' + (response?.error || 'Nieznany błąd'));
+      }
+    }).catch(err => {
+      console.log('[Sidepanel] ❌ Błąd wysyłania clear-cache:', err.message);
+      alert('❌ Błąd komunikacji: ' + err.message);
+    });
+  });
+  console.log('[Sidepanel] ✅ Click listener dodany do przycisku Wyczyść cache');
 }
 
 // ETAP 2*: Obsługa przycisku "Pobierz cały wątek" + Thread Intelligence
@@ -1437,6 +1498,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const shortMsgId = currentState.messageId.length > 8 ? currentState.messageId.slice(0, 8) + '…' : currentState.messageId;
       messageIdElement.innerHTML = `${shortMsgId}<span class="has-analysis-check">✓</span>`;
       messageIdElement.title = currentState.messageId + ' (analiza dostępna)';
+    }
+    
+    // Ustaw etykietę źródła danych
+    if (message.fromCache) {
+      setDataSourceLabel('cache');
+    } else if (message.metadata?.cached) {
+      setDataSourceLabel('firestore');
+    } else {
+      setDataSourceLabel('fresh');
     }
     
     displayAnalysisData(message.data);

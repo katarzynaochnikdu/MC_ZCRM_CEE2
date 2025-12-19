@@ -165,6 +165,41 @@
       background-color: #6d28d9;
     }
 
+    .fetch-btn.btn-clear {
+      background-color: #6b7280;
+      flex: 0 0 auto;
+      padding: 6px 8px;
+    }
+
+    .fetch-btn.btn-clear:hover {
+      background-color: #4b5563;
+    }
+
+    /* Etykieta źródła danych */
+    .data-source-label {
+      font-size: 9px;
+      padding: 2px 6px;
+      border-radius: 8px;
+      display: inline-block;
+      margin-left: 6px;
+      font-weight: 600;
+    }
+
+    .data-source-label.source-cache {
+      background-color: #fef3c7;
+      color: #92400e;
+    }
+
+    .data-source-label.source-firestore {
+      background-color: #fce7f3;
+      color: #9d174d;
+    }
+
+    .data-source-label.source-fresh {
+      background-color: #d1fae5;
+      color: #065f46;
+    }
+
     /* ===== Karty firm i kontaktów ===== */
     #cardsSection {
       margin-top: 6px;
@@ -480,6 +515,9 @@
       <button id="analyzeLLMBtn" class="fetch-btn btn-llm" style="display: none;">
         🤖 Analizuj
       </button>
+      <button id="clearCacheBtn" class="fetch-btn btn-clear" title="Wyczyść lokalny cache wtyczki">
+        🗑️
+      </button>
     </div>
 
     <!-- Stare elementy (ukryte, ale zachowane dla kompatybilności JS) -->
@@ -496,7 +534,7 @@
     <!-- ETAP 4: Sekcja analizy LLM (zwinięta) -->
     <div id="analysisSection" style="display: none;">
       <details style="margin-bottom: 8px;">
-        <summary style="font-size: 11px; font-weight: 600; color: #7c3aed; cursor: pointer;">🤖 JSON LLM</summary>
+        <summary style="font-size: 11px; font-weight: 600; color: #7c3aed; cursor: pointer;">🤖 JSON LLM <span id="dataSourceLabel" class="data-source-label" style="display: none;"></span></summary>
         <div id="analysisData" style="font-size: 10px; background: #faf5ff; padding: 6px; border-radius: 4px; max-height: 150px; overflow-y: auto; white-space: pre-wrap; font-family: 'Courier New', monospace; border-left: 2px solid #7c3aed; margin-top: 4px;"></div>
       </details>
     </div>

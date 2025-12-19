@@ -25,6 +25,7 @@ Przechowuje wyniki analizy LLM dla każdej wiadomości Gmail.
     companies: Array<{
       company_name: string,
       company_friendly_name: string | null,
+      company_keyword: string | null,      // 1-2 słowa kluczowe do wyszukiwania w CRM
       website: string | null,
       phone: string | null,
       email: string | null,
@@ -37,7 +38,9 @@ Przechowuje wyniki analizy LLM dla każdej wiadomości Gmail.
       phone: string | null,
       mobile: string | null,
       email: string,
+      email_is_personal: boolean | null,   // true = bezpośredni służbowy do osoby, false = prywatny/ogólny
       company_name: string | null,
+      company_nip: string | null,          // NIP firmy kontaktu (jeśli znany)
       salutation: "Pan" | "Pani" | null
     }>
   },
@@ -66,6 +69,7 @@ Przechowuje wyniki analizy LLM dla każdej wiadomości Gmail.
       {
         "company_name": "Example Medical Sp. z o.o.",
         "company_friendly_name": "ExMed",
+        "company_keyword": "EXMED",
         "website": "exmed.pl",
         "phone": "+48 22 123 45 67",
         "email": "kontakt@exmed.pl",
@@ -80,7 +84,9 @@ Przechowuje wyniki analizy LLM dla każdej wiadomości Gmail.
         "phone": "+48 22 123 45 68",
         "mobile": "+48 600 123 456",
         "email": "j.kowalski@exmed.pl",
+        "email_is_personal": true,
         "company_name": "Example Medical Sp. z o.o.",
+        "company_nip": "1234567890",
         "salutation": "Pan"
       }
     ]

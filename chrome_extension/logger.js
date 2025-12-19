@@ -2,7 +2,7 @@
 
 // KONFIGURACJA: URL do Twojego Google Apps Script Web App
 // Skopiuj URL i wklej tutaj:
-const GAS_WEB_APP_URL = 'https://script.google.com/a/macros/med-space.pl/s/AKfycbwX0Oeur5Hx5k0-T8IbgyeK67vhHfepA5lRNypftgL4wDNFeK8-BkrXZTlKzuW39p8/exec';
+const GAS_WEB_APP_URL = 'https://script.google.com/a/macros/med-space.pl/s/AKfycbz5yMbsm_p0ixk5UmHOYHmsUAsj9sBGL_49EgO1YC6EcZHvIBoxcm1FPbSBhkzKNNY/exec';
 
 // Poziomy logowania
 const LOG_LEVELS = {

@@ -1423,6 +1423,8 @@ function fetchThreadFull(threadId, messageId) {
 // Endpoint doPOST - odbiera logi z rozszerzenia Chrome + ETAP 2: Gmail API calls
 function doPost(e) {
   try {
+    // Pieczątka wersji – pozwala jednoznacznie stwierdzić, czy wtyczka trafia w aktualny deployment
+    const GAS_BUILD_TAG = '2025-12-19-gating-v1';
     const data = JSON.parse(e.postData.contents);
     
     // ========== ETAP 2*: Gmail API Routing ==========
@@ -1450,6 +1452,15 @@ function doPost(e) {
           error: 'Nieznana akcja: ' + data.action
         };
       }
+
+      // Dopnij pieczątkę do odpowiedzi (nie wpływa na logikę biznesową)
+      try {
+        if (result && typeof result === 'object') {
+          result._gasBuildTag = GAS_BUILD_TAG;
+        } else {
+          result = { success: true, value: result, _gasBuildTag: GAS_BUILD_TAG };
+        }
+      } catch (tagErr) {}
       
       return ContentService.createTextOutput(JSON.stringify(result))
         .setMimeType(ContentService.MimeType.JSON);
@@ -1472,6 +1483,11 @@ function doPost(e) {
       timestamp: data.timestamp || new Date().toISOString(),
       additionalData: data.additionalData || {}
     });
+
+    // Dopnij pieczątkę również do odpowiedzi loggera
+    try {
+      result._gasBuildTag = GAS_BUILD_TAG;
+    } catch (tagErr2) {}
     
     return ContentService.createTextOutput(JSON.stringify(result))
       .setMimeType(ContentService.MimeType.JSON);

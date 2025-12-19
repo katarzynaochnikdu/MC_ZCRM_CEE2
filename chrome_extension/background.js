@@ -23,7 +23,7 @@ let currentState = null;
 // Jeśli logger.js nie załadował się, użyj fallback URL
 const GAS_WEB_APP_URL_FOR_FETCH = typeof GAS_WEB_APP_URL !== 'undefined' 
   ? GAS_WEB_APP_URL 
-  : 'https://script.google.com/a/macros/med-space.pl/s/AKfycbwX0Oeur5Hx5k0-T8IbgyeK67vhHfepA5lRNypftgL4wDNFeK8-BkrXZTlKzuW39p8/exec';
+  : 'https://script.google.com/a/macros/med-space.pl/s/AKfycbz5yMbsm_p0ixk5UmHOYHmsUAsj9sBGL_49EgO1YC6EcZHvIBoxcm1FPbSBhkzKNNY/exec';
 
 // ETAP 2*: Konfiguracja auto-fetch (true = włączony, false = wyłączony)
 const AUTO_FETCH_ENABLED = true;
@@ -111,6 +111,10 @@ async function callGAS(action, params) {
   try {
     const response = await fetch(GAS_WEB_APP_URL_FOR_FETCH, {
       method: 'POST',
+      // UWAGA: nie używamy credentials=include, bo Apps Script często zwraca
+      // Access-Control-Allow-Origin: * i wtedy przeglądarka blokuje odpowiedź przy include.
+      // Jeśli WebApp jest ograniczony do domeny, trzeba to rozwiązać po stronie deploymentu (lub przez token),
+      // a nie przez cookies w fetch.
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: action,
@@ -142,13 +146,15 @@ async function callGAS(action, params) {
       success: Boolean(data?.success),
       messageId: params?.messageId || data?.messageId || '-',
       threadId: params?.threadId || data?.threadId || '-',
+      gasBuildTag: data?._gasBuildTag || '-',
     });
     if (backgroundLogger) {
       backgroundLogger.info(`📊 Performance GAS (${action})`, {
         fetchTime: `${fetchTime.toFixed(0)}ms`,
         dataSize: `${dataSize} bytes`,
         messageId: params.messageId || '-',
-        threadId: params.threadId || '-'
+        threadId: params.threadId || '-',
+        gasBuildTag: data?._gasBuildTag || '-'
       });
     }
 
@@ -510,6 +516,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const msgId = message.messageId;
     const cache = messageCache[msgId] || null;
     sendResponse({ success: true, cache: cache });
+  }
+
+  // Wyczyść cały lokalny cache wtyczki
+  if (message.type === 'clear-cache') {
+    console.log('[Background] 🗑️ Czyszczenie cache...');
+    
+    // Wyczyść zmienne w pamięci
+    threadCache = {};
+    messageCache = {};
+    currentState = null;
+    
+    // Wyczyść chrome.storage.local
+    if (chrome && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.clear().then(() => {
+        console.log('[Background] ✅ Cache wyczyszczony (storage + pamięć)');
+        if (backgroundLogger) {
+          backgroundLogger.info('🗑️ Cache wyczyszczony');
+        }
+        sendResponse({ success: true });
+      }).catch(error => {
+        console.error('[Background] ❌ Błąd czyszczenia storage:', error);
+        sendResponse({ success: false, error: error.toString() });
+      });
+    } else {
+      console.log('[Background] ✅ Cache wyczyszczony (tylko pamięć - storage niedostępny)');
+      sendResponse({ success: true });
+    }
+    
+    return true; // Asynchroniczna odpowiedź
   }
   
   return true; // Asynchroniczna odpowiedź
