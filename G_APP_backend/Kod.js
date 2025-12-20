@@ -419,9 +419,6 @@ function searchAccountsByName(name, candidate) {
     }
 
     // Niejednoznaczne / brak
-    if (raw || normalized) {
-      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Account name search ambiguous or empty results: ' + (raw || normalized) });
-    }
     return null;
   } catch (error) {
     Logger.log('[Zoho] searchAccountsByName error: ' + error);
@@ -441,9 +438,6 @@ function searchAccountsByDomain(domain, candidate) {
       limit: 5
     });
     const record = pickBestAccountRecord(records, candidate, normalized) || (records.length === 1 ? records[0] : null);
-    if (!record && records.length > 1) {
-      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Account domain search ambiguous: domain=' + normalized + ', hits=' + records.length });
-    }
     return buildAccountMatch(record, 'domain', candidate);
   } catch (error) {
     Logger.log('[Zoho] searchAccountsByDomain error: ' + error);
@@ -939,7 +933,6 @@ function matchAccountCandidate(candidate) {
 
   var candidateJson = JSON.stringify(candidate);
   Logger.log('[Zoho Matching] 🔍 Account candidate: ' + candidateJson);
-  saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Account candidate: ' + candidateJson });
 
   // ZASADA SYSTEMOWA: existsInCrm dla firmy ustawiamy WYŁĄCZNIE po NIP.
   // Domena/nazwa/keyword służą tylko jako "possible match" (hint), nigdy jako twardy match.
@@ -950,7 +943,6 @@ function matchAccountCandidate(candidate) {
     match = searchAccountsByNip(candidate.nip, candidate);
     if (match && match.existsInCrm) {
       Logger.log('[Zoho Matching] ✅ Match by NIP, crmId=' + match.crmId);
-      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by NIP: crmId=' + match.crmId });
       return match;
     }
     // Jeśli NIP jest, ale nie ma matchu → rekord w CRM nie istnieje wg polityki, ale możemy dać hinty (wykrycie potencjalnych duplikatów).
@@ -970,11 +962,9 @@ function matchAccountCandidate(candidate) {
       seen.add(p.crmId);
       return true;
     });
-    saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Possible matches found: ' + possible.length });
   }
 
   Logger.log('[Zoho Matching] ❌ Account not found in CRM');
-  saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Account not found (by NIP): ' + (candidate.company_name || candidate.name || 'unknown') });
   var out = emptyMatch();
   out.possibleCrmMatches = possible;
   return out;
@@ -985,7 +975,6 @@ function matchContactCandidate(candidate) {
 
   var candidateJson = JSON.stringify(candidate);
   Logger.log('[Zoho Matching] 🔍 Contact candidate: ' + candidateJson);
-  saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Contact candidate: ' + candidateJson });
 
   var match = null;
   var email = resolveCandidateEmail(candidate);
@@ -999,7 +988,6 @@ function matchContactCandidate(candidate) {
   // Anty-błąd: nie dopasowuj "sekretariat@" jako osoby, jeśli nie mamy żadnego imienia/nazwiska
   if (email && emailDepartmentLike && !name.hasAny) {
     Logger.log('[Zoho Matching] ⛔ Pomijam contact match: ogólny email bez osoby: ' + email);
-    saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Skip contact match: department-like email without person: ' + email });
     return emptyMatch();
   }
 
@@ -1009,7 +997,6 @@ function matchContactCandidate(candidate) {
     match = searchContactsByEmail(email, candidate);
     if (match && match.existsInCrm) {
       Logger.log('[Zoho Matching] ✅ Match by email (direct), crmId=' + match.crmId);
-      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by email (direct): crmId=' + match.crmId });
       return match;
     }
   }
@@ -1023,7 +1010,6 @@ function matchContactCandidate(candidate) {
       match = searchContactByNameAndEmail(firstName, lastName, email, candidate);
       if (match && match.existsInCrm) {
         Logger.log('[Zoho Matching] ✅ Match by name+email (non-direct), crmId=' + match.crmId);
-        saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by name+email (non-direct): crmId=' + match.crmId });
         return match;
       }
     }
@@ -1035,15 +1021,126 @@ function matchContactCandidate(candidate) {
     match = searchContactsByPhone(phone, candidate);
     if (match && match.existsInCrm) {
       Logger.log('[Zoho Matching] ✅ Match by phone, crmId=' + match.crmId);
-      saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Match by phone: crmId=' + match.crmId });
       return match;
     }
   }
 
   var contactName = (candidate.first_name || '') + ' ' + (candidate.last_name || '');
   Logger.log('[Zoho Matching] ❌ Contact not found in CRM: ' + contactName.trim());
-  saveLogToDrive({ source: 'ZOHO_MATCHING', message: 'Contact not found: ' + contactName.trim() });
   return emptyMatch();
+}
+
+// ========== BATCH MATCHING (OPTYMALIZACJA) ==========
+
+/**
+ * Batch search kontaktów po emailach - jedno zapytanie COQL zamiast N sekwencyjnych.
+ * Zwraca mapę: email (lowercase) -> rekord z CRM
+ */
+function batchSearchContactsByEmails(emails) {
+  if (!emails || !emails.length) return {};
+  
+  // Normalizuj emaile i usuń duplikaty
+  const uniqueEmails = [];
+  const seen = new Set();
+  for (var i = 0; i < emails.length; i++) {
+    var normalized = (emails[i] || '').toString().trim().toLowerCase();
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      uniqueEmails.push(normalized);
+    }
+  }
+  
+  if (!uniqueEmails.length) return {};
+  
+  // Limit COQL - max ~100 warunków OR (bezpieczeństwo)
+  var batchSize = 50;
+  var resultMap = {};
+  
+  for (var batchStart = 0; batchStart < uniqueEmails.length; batchStart += batchSize) {
+    var batch = uniqueEmails.slice(batchStart, batchStart + batchSize);
+    
+    // Buduj warunek WHERE z OR
+    var conditions = batch.map(function(email) {
+      return "(Email = '" + zohoEscapeCoqlString(email) + "')";
+    }).join(' OR ');
+    
+    try {
+      var records = zohoCoql({
+        module: 'Contacts',
+        fields: ['id', 'Email', 'First_Name', 'Last_Name', 'Phone', 'Mobile', 'Account_Name', 'Typ_kontaktu', 'Owner'],
+        where: '(' + conditions + ')',
+        limit: batch.length * 2 // trochę więcej na wypadek duplikatów
+      });
+      
+      // Mapuj wyniki po emailu
+      for (var j = 0; j < records.length; j++) {
+        var record = records[j];
+        var recEmail = (record.Email || '').toString().trim().toLowerCase();
+        if (recEmail && !resultMap[recEmail]) {
+          resultMap[recEmail] = record;
+        }
+      }
+    } catch (e) {
+      Logger.log('[Batch] batchSearchContactsByEmails error: ' + e);
+    }
+  }
+  
+  Logger.log('[Batch] Contacts batch search: ' + uniqueEmails.length + ' emails -> ' + Object.keys(resultMap).length + ' found');
+  return resultMap;
+}
+
+/**
+ * Batch search firm po NIP - jedno zapytanie COQL.
+ * Zwraca mapę: nip (znormalizowany) -> rekord z CRM
+ */
+function batchSearchAccountsByNips(nips) {
+  if (!nips || !nips.length) return {};
+  
+  // Normalizuj NIPy i usuń puste/duplikaty
+  var uniqueNips = [];
+  var seen = new Set();
+  for (var i = 0; i < nips.length; i++) {
+    var normalized = normalizeNip(nips[i]);
+    if (normalized && normalized.length >= 10 && !seen.has(normalized)) {
+      seen.add(normalized);
+      uniqueNips.push(normalized);
+    }
+  }
+  
+  if (!uniqueNips.length) return {};
+  
+  var resultMap = {};
+  var batchSize = 50;
+  
+  for (var batchStart = 0; batchStart < uniqueNips.length; batchStart += batchSize) {
+    var batch = uniqueNips.slice(batchStart, batchStart + batchSize);
+    
+    var conditions = batch.map(function(nip) {
+      return "(NIP = '" + zohoEscapeCoqlString(nip) + "')";
+    }).join(' OR ');
+    
+    try {
+      var records = zohoCoql({
+        module: 'Accounts',
+        fields: ['id', 'Account_Name', 'Website', 'Phone', 'NIP', 'Owner'],
+        where: '(' + conditions + ')',
+        limit: batch.length * 2
+      });
+      
+      for (var j = 0; j < records.length; j++) {
+        var record = records[j];
+        var recNip = normalizeNip(record.NIP);
+        if (recNip && !resultMap[recNip]) {
+          resultMap[recNip] = record;
+        }
+      }
+    } catch (e) {
+      Logger.log('[Batch] batchSearchAccountsByNips error: ' + e);
+    }
+  }
+  
+  Logger.log('[Batch] Accounts batch search: ' + uniqueNips.length + ' NIPs -> ' + Object.keys(resultMap).length + ' found');
+  return resultMap;
 }
 
 // Funkcja do pobrania lub utworzenia folderu z logami
@@ -1541,48 +1638,87 @@ const CLOUD_RUN_URL = "https://gmail-crm-llm-backend-183771205172.europe-central
  * @returns {Object} - { success: true, analysis: {...}, metadata: {...} }
  */
 function performZohoMatching(messageId, filteredAnalysis, metadata) {
-  Logger.log('[GAS] 🔍 Matching z Zoho CRM START...');
+  Logger.log('[GAS] 🔍 Matching z Zoho CRM START (BATCH MODE)...');
   const matchStart = Date.now();
   
   const resultMetadata = Object.assign({}, metadata || {});
   resultMetadata.ignoredCompanies = filteredAnalysis.ignoredCompanies || 0;
   resultMetadata.ignoredContacts = filteredAnalysis.ignoredContacts || 0;
   
-  // Match firms
-  const enrichedCompanies = (filteredAnalysis.companies || []).map(function(company, idx) {
-    Logger.log('[GAS] 🏢 Matching firma ' + (idx + 1) + '/' + (filteredAnalysis.companies || []).length + ': ' + (company.company_name || 'bez nazwy'));
+  const companies = filteredAnalysis.companies || [];
+  const contacts = filteredAnalysis.contacts || [];
+  
+  // ============ BATCH PHASE 1: Zbierz wszystkie identyfikatory ============
+  Logger.log('[GAS] 📦 Batch Phase 1: Zbieranie identyfikatorów...');
+  
+  // Zbierz wszystkie NIPy firm
+  var allNips = [];
+  for (var i = 0; i < companies.length; i++) {
+    if (companies[i].nip) allNips.push(companies[i].nip);
+  }
+  
+  // Zbierz wszystkie emaile kontaktów (wszystkie, nie tylko direct)
+  var allEmails = [];
+  for (var j = 0; j < contacts.length; j++) {
+    var contact = contacts[j];
+    var email = resolveCandidateEmail(contact);
+    if (email) {
+      allEmails.push(email);
+    }
+  }
+  
+  Logger.log('[GAS] 📦 Zebrano: ' + allNips.length + ' NIPów, ' + allEmails.length + ' emaili direct');
+  
+  // ============ BATCH PHASE 2: Wykonaj batch zapytania ============
+  Logger.log('[GAS] 🚀 Batch Phase 2: Wykonuję batch COQL...');
+  const batchStart = Date.now();
+  
+  // Batch search - jedno zapytanie zamiast N
+  var nipToAccount = batchSearchAccountsByNips(allNips);
+  var emailToContact = batchSearchContactsByEmails(allEmails);
+  
+  const batchTime = Date.now() - batchStart;
+  Logger.log('[GAS] ⚡ Batch COQL zakończony: ' + batchTime + 'ms');
+  
+  // ============ PHASE 3: Dopasuj firmy używając cache ============
+  Logger.log('[GAS] 🏢 Phase 3: Dopasowywanie firm...');
+  
+  const enrichedCompanies = companies.map(function(company, idx) {
     try {
-      const match = matchAccountCandidate(company);
-      if (match && match.existsInCrm) {
+      var normalizedNip = normalizeNip(company.nip);
+      var cachedAccount = normalizedNip ? nipToAccount[normalizedNip] : null;
+      
+      if (cachedAccount) {
+        // Znaleziono w batch cache
         company.existsInCrm = true;
-        company.crmId = match.crmId;
-        company.crmData = match.crmData;
-        company.matchSource = match.matchSource;
-        company.needsEnrichment = match.needsEnrichment;
-        company.category = match.needsEnrichment ? 'existing_enrichable' : 'existing_complete';
+        company.crmId = cachedAccount.id;
+        company.crmData = cachedAccount;
+        company.matchSource = 'nip_batch';
+        company.needsEnrichment = accountNeedsEnrichment(company, cachedAccount);
+        company.category = company.needsEnrichment ? 'existing_enrichable' : 'existing_complete';
         
-        Logger.log('[GAS] ✅ Firma matched: existsInCrm=true' + 
-                   ', matchSource=' + match.matchSource + 
-                   ', needsEnrichment=' + match.needsEnrichment +
-                   ', category=' + company.category);
+        Logger.log('[GAS] ✅ Firma [' + (idx+1) + '] matched (batch): ' + (company.company_name || 'bez nazwy'));
       } else {
-        const possible = match && Array.isArray(match.possibleCrmMatches) ? match.possibleCrmMatches : [];
+        // Nie znaleziono w batch - hint search (possible matches)
+        var domain = getCandidateDomain(company);
+        var kw = extractCompanyKeyword(company);
+        var possible = findPossibleAccountsCombined(domain, kw);
+        
         company.existsInCrm = false;
         company.crmId = null;
         company.crmData = null;
         company.matchSource = null;
         company.needsEnrichment = false;
-        company.possibleCrmMatches = possible;
-
-        const hasNip = Boolean(company.nip);
-        if (possible.length) {
+        company.possibleCrmMatches = possible || [];
+        
+        var hasNip = Boolean(company.nip);
+        if (possible && possible.length) {
           company.category = 'possible_match';
-          Logger.log('[GAS] 🟣 Firma possible_match (hinty=' + possible.length + ')');
         } else {
-          // wg polityki: bez NIP firma nie jest "complete"
           company.category = hasNip ? 'new_complete' : 'new_partial';
-          Logger.log('[GAS] ℹ️ Firma nie znaleziona w CRM (by NIP), category=' + company.category);
         }
+        
+        Logger.log('[GAS] ℹ️ Firma [' + (idx+1) + '] nie znaleziona: ' + (company.company_name || 'bez nazwy') + ', category=' + company.category);
       }
     } catch (matchError) {
       Logger.log('[GAS] ⚠️ Błąd matchingu firmy: ' + matchError.toString());
@@ -1596,25 +1732,30 @@ function performZohoMatching(messageId, filteredAnalysis, metadata) {
     return company;
   });
   
-  // Match contacts
-  const enrichedContacts = (filteredAnalysis.contacts || []).map(function(contact, idx) {
-    Logger.log('[GAS] 👤 Matching kontakt ' + (idx + 1) + '/' + (filteredAnalysis.contacts || []).length + ': ' + 
-               (contact.first_name || '') + ' ' + (contact.last_name || ''));
+  // ============ PHASE 4: Dopasuj kontakty używając cache ============
+  Logger.log('[GAS] 👤 Phase 4: Dopasowywanie kontaktów...');
+  
+  const enrichedContacts = contacts.map(function(contact, idx) {
     try {
-      const match = matchContactCandidate(contact);
-      if (match && match.existsInCrm) {
+      var email = resolveCandidateEmail(contact);
+      var normalizedEmail = email ? email.toString().trim().toLowerCase() : '';
+      var emailDirectBusiness = contact.email_is_personal === true;
+      
+      // Sprawdź batch cache (tylko dla direct business emails)
+      var cachedContact = (emailDirectBusiness && normalizedEmail) ? emailToContact[normalizedEmail] : null;
+      
+      if (cachedContact) {
+        // Znaleziono w batch cache
         contact.existsInCrm = true;
-        contact.crmId = match.crmId;
-        contact.crmData = match.crmData;
-        contact.matchSource = match.matchSource;
-        contact.needsEnrichment = match.needsEnrichment;
-        contact.category = match.needsEnrichment ? 'existing_enrichable' : 'existing_complete';
+        contact.crmId = cachedContact.id;
+        contact.crmData = cachedContact;
+        contact.matchSource = 'email_batch';
+        contact.needsEnrichment = contactNeedsEnrichment(contact, cachedContact);
+        contact.category = contact.needsEnrichment ? 'existing_enrichable' : 'existing_complete';
         
-        Logger.log('[GAS] ✅ Kontakt matched: existsInCrm=true' + 
-                   ', matchSource=' + match.matchSource + 
-                   ', needsEnrichment=' + match.needsEnrichment +
-                   ', category=' + contact.category);
-      } else {
+        Logger.log('[GAS] ✅ Kontakt [' + (idx+1) + '] matched (batch): ' + (contact.first_name || '') + ' ' + (contact.last_name || ''));
+      } else if (normalizedEmail) {
+        // Email był w batch query ale nie znaleziono → nie istnieje w CRM (bez fallback!)
         contact.existsInCrm = false;
         contact.crmId = null;
         contact.crmData = null;
@@ -1622,7 +1763,43 @@ function performZohoMatching(messageId, filteredAnalysis, metadata) {
         contact.needsEnrichment = false;
         var hasBasicData = contact.first_name && contact.last_name && contact.email;
         contact.category = hasBasicData ? 'new_complete' : 'new_partial';
-        Logger.log('[GAS] ℹ️ Kontakt nie znaleziony w CRM (nowy rekord), category=' + contact.category);
+        
+        Logger.log('[GAS] ℹ️ Kontakt [' + (idx+1) + '] nie znaleziony (batch): ' + (contact.first_name || '') + ' ' + (contact.last_name || ''));
+      } else {
+        // Brak emaila → fallback do phone search
+        var phone = resolveCandidatePhone(contact);
+        if (phone) {
+          var match = searchContactsByPhone(phone, contact);
+          if (match && match.existsInCrm) {
+            contact.existsInCrm = true;
+            contact.crmId = match.crmId;
+            contact.crmData = match.crmData;
+            contact.matchSource = 'phone';
+            contact.needsEnrichment = match.needsEnrichment;
+            contact.category = match.needsEnrichment ? 'existing_enrichable' : 'existing_complete';
+            
+            Logger.log('[GAS] ✅ Kontakt [' + (idx+1) + '] matched (phone): ' + (contact.first_name || '') + ' ' + (contact.last_name || ''));
+          } else {
+            contact.existsInCrm = false;
+            contact.crmId = null;
+            contact.crmData = null;
+            contact.matchSource = null;
+            contact.needsEnrichment = false;
+            contact.category = 'new_partial';
+            
+            Logger.log('[GAS] ℹ️ Kontakt [' + (idx+1) + '] nie znaleziony (phone): ' + (contact.first_name || '') + ' ' + (contact.last_name || ''));
+          }
+        } else {
+          // Brak emaila i telefonu
+          contact.existsInCrm = false;
+          contact.crmId = null;
+          contact.crmData = null;
+          contact.matchSource = null;
+          contact.needsEnrichment = false;
+          contact.category = 'new_partial';
+          
+          Logger.log('[GAS] ⚠️ Kontakt [' + (idx+1) + '] bez identyfikatora: ' + (contact.first_name || '') + ' ' + (contact.last_name || ''));
+        }
       }
     } catch (matchError) {
       Logger.log('[GAS] ⚠️ Błąd matchingu kontaktu: ' + matchError.toString());
@@ -1637,7 +1814,7 @@ function performZohoMatching(messageId, filteredAnalysis, metadata) {
   });
   
   const matchTime = Date.now() - matchStart;
-  Logger.log('[GAS] 🔍 Matching COMPLETE: ' + matchTime + 'ms');
+  Logger.log('[GAS] 🔍 Matching COMPLETE (BATCH): ' + matchTime + 'ms (batch COQL: ' + batchTime + 'ms)');
   
   return {
     success: true,
