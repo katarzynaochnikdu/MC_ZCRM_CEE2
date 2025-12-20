@@ -25,7 +25,9 @@ ZWRÓĆ TYLKO TEN JSON (bez markdown, bez dodatkowego tekstu):
 
 {
   "companies": [...],
-  "contacts": [...]
+  "contacts": [...],
+  "all_found_emails": [...],
+  "all_found_phones": [...]
 }
 
 3. DEFINICJA companies[]
@@ -97,16 +99,40 @@ WAŻNE:
 - ZWRACAJ WSZYSTKIE kontakty - nawet te z prywatnymi mailami (oznacz je jako email_is_personal: true)
 - NIE POMIJAJ kontaktów tylko dlatego że mają prywatny email
 
-5. REGUŁY OGÓLNE
+5. DEFINICJA all_found_emails[] i all_found_phones[]
+=====================================================
+
+NOWE POLA - zbierz WSZYSTKIE emaile i telefony znalezione w mailu:
+
+all_found_emails:
+- Tablica WSZYSTKICH adresów email znalezionych w całym mailu
+- Włącznie z tymi przypisanymi do kontaktów
+- Włącznie z tymi w stopkach, podpisach, treści forwarded
+- Każdy email jako string, np. ["email1@firma.pl", "info@test.com", "jan.kowalski@gmail.com"]
+- NIE pomijaj żadnych - nawet prywatnych (gmail, wp, o2)
+- Deduplikuj (każdy email tylko raz)
+- Sortuj alfabetycznie
+
+all_found_phones:
+- Tablica WSZYSTKICH numerów telefonów znalezionych w całym mailu
+- Włącznie z tymi przypisanymi do kontaktów
+- Włącznie z komórkowymi i stacjonarnymi
+- Format: E.164 lub z spacjami, np. ["+48 123 456 789", "+48600123456"]
+- Deduplikuj (każdy numer tylko raz)
+- Sortuj alfabetycznie/numerycznie
+
+CEL: Użytkownik może chcieć przypisać inny email/telefon do kontaktu niż ten który LLM automatycznie przypisał.
+
+6. REGUŁY OGÓLNE
 =================
 
 1. Nie zgaduj danych — jeśli brak informacji → null
 2. Usuń stopki, disclaimery, social media, slogany, pouczenia prawne
 3. NIE zwracaj niczego poza czystym JSON-em
-4. Jeśli nie ma żadnych firm/kontaktów, zwróć puste tablice: {"companies": [], "contacts": []}
+4. Jeśli nie ma żadnych firm/kontaktów, zwróć puste tablice: {"companies": [], "contacts": [], "all_found_emails": [], "all_found_phones": []}
 5. Zachowaj DOKŁADNIE tę strukturę JSON
 
-6. PRZYKŁADY
+7. PRZYKŁADY
 ============
 
 PRZYKŁAD 1 - Email z firmą i kontaktem:
@@ -150,12 +176,14 @@ OUTPUT:
       "phone": "+48 22 123 45 68",
       "mobile": "+48 600 123 456",
       "email": "j.kowalski@exmed.pl",
-      "email_is_personal": false,
+      "email_is_personal": true,
       "company_name": "Example Medical Sp. z o.o.",
       "company_nip": "1234567890",
       "salutation": "Pan"
     }
-  ]
+  ],
+  "all_found_emails": ["j.kowalski@exmed.pl", "kontakt@exmed.pl"],
+  "all_found_phones": ["+48 22 123 45 68", "+48 600 123 456"]
 }
 
 PRZYKŁAD 2 - Email bez danych biznesowych:
@@ -173,17 +201,21 @@ Kasia
 OUTPUT:
 {
   "companies": [],
-  "contacts": []
+  "contacts": [],
+  "all_found_emails": [],
+  "all_found_phones": []
 }
 
-7. FORMAT KOŃCOWY
+8. FORMAT KOŃCOWY
 =================
 
 Zwróć DOKŁADNIE ten JSON (bez ``` markdown, bez dodatkowego tekstu):
 
 {
   "companies": [...],
-  "contacts": [...]
+  "contacts": [...],
+  "all_found_emails": [...],
+  "all_found_phones": [...]
 }
 
 =========================================================
