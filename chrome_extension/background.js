@@ -23,7 +23,7 @@ let currentState = null;
 // Jeśli logger.js nie załadował się, użyj fallback URL
 const GAS_WEB_APP_URL_FOR_FETCH = typeof GAS_WEB_APP_URL !== 'undefined' 
   ? GAS_WEB_APP_URL 
-  : 'https://script.google.com/a/macros/med-space.pl/s/AKfycbwX0Oeur5Hx5k0-T8IbgyeK67vhHfepA5lRNypftgL4wDNFeK8-BkrXZTlKzuW39p8/exec';
+  : 'https://script.google.com/a/macros/med-space.pl/s/AKfycbz_Z30Ioqs5fCziztl1kYL3cgOTV6BPKpdhqWDNYTl_kULklcE42wxMniQR3IO58oA/exec';
 
 // ETAP 2*: Konfiguracja auto-fetch (true = włączony, false = wyłączony)
 const AUTO_FETCH_ENABLED = true;

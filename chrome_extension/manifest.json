@@ -18,7 +18,8 @@
     }
   },
   "permissions": [
-    "sidePanel"
+    "sidePanel",
+    "storage"
   ],
   "host_permissions": [
     "https://mail.google.com/*",
